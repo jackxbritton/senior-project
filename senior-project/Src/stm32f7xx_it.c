@@ -37,9 +37,19 @@
 
 /* USER CODE BEGIN 0 */
 
+#include <string.h>
+#include "tones.h"
+#include <math.h>
+
+#define DMA_BUF_LEN 1024 // TODO Header file
+extern uint16_t dma_buf[DMA_BUF_LEN];
+//extern int tone;
+extern DAC_HandleTypeDef hdac;
+
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
+extern DMA_HandleTypeDef hdma_dac1;
 extern UART_HandleTypeDef huart5;
 
 /******************************************************************************/
@@ -191,6 +201,24 @@ void SysTick_Handler(void)
 /* For the available peripheral interrupt handler names,                      */
 /* please refer to the startup file (startup_stm32f7xx.s).                    */
 /******************************************************************************/
+
+/**
+* @brief This function handles DMA1 stream5 global interrupt.
+*/
+void DMA1_Stream5_IRQHandler(void)
+{
+  /* USER CODE BEGIN DMA1_Stream5_IRQn 0 */
+
+  /* USER CODE END DMA1_Stream5_IRQn 0 */
+  HAL_DMA_IRQHandler(&hdma_dac1);
+  /* USER CODE BEGIN DMA1_Stream5_IRQn 1 */
+
+  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14);
+
+  HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t *) dma_buf, DMA_BUF_LEN, DAC_ALIGN_12B_R);
+
+  /* USER CODE END DMA1_Stream5_IRQn 1 */
+}
 
 /**
 * @brief This function handles UART5 global interrupt.
