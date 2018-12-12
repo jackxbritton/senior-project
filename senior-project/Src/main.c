@@ -44,7 +44,8 @@
 
 #include <string.h>
 #include <math.h>
-//#include "tones.h"
+#define M_PI 3.14159265358979323846f
+#include "midi.h"
 
 /* USER CODE END Includes */
 
@@ -60,10 +61,6 @@ UART_HandleTypeDef huart5;
 /* USER CODE BEGIN PV */
 
 uint8_t uart_buf[1];
-#define DMA_BUF_LEN 1024
-uint16_t dma_buf[DMA_BUF_LEN];
-//int midi_count = 0;
-//int tone = 12;
 
 /* USER CODE END PV */
 
@@ -127,11 +124,6 @@ int main(void)
   // UART interrupts.
   memset(uart_buf, 0, sizeof(uart_buf));
   HAL_UART_Receive_IT(&huart5, uart_buf, sizeof(uart_buf));
-
-  // TODO Populate dma buffer with test data.
-  for (int i = 0; i < DMA_BUF_LEN; i++) {
-    dma_buf[i] = UINT16_MAX * (sinf(i / 64.0f) + 1.0f)/2.0f;
-  }
 
   /* USER CODE END 2 */
 
@@ -251,7 +243,7 @@ static void MX_TIM6_Init(void)
   htim6.Instance = TIM6;
   htim6.Init.Prescaler = 0;
   htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim6.Init.Period = 32768;
+  htim6.Init.Period = 2047;
   htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
   {
@@ -338,12 +330,17 @@ static void MX_GPIO_Init(void)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 
-  //if (uart_buf[0] >> 7) midi_count = 0;
-  //else                  midi_count++;
-  //if (midi_count == 1) tone = uart_buf[0] % 12;
-  //else if (midi_count == 2 && uart_buf[0] == 0) tone = 12;
+  // Update midi_count.
+  if (uart_buf[0] >> 7) midi_count = 0;
+  else                  midi_count++;
 
-  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
+  // Set note.
+  if (midi_count == 1) note = uart_buf[0] % 12;
+  else if (midi_count == 2 && uart_buf[0] == 0) note = 12;
+
+  // Light up LED if a note is being pressed.
+  if (note == 12) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+  else            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
 
   HAL_UART_Receive_IT(&huart5, uart_buf, sizeof(uart_buf));
 

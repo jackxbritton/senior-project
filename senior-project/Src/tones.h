@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-extern const uint16_t tones[12][32];
+extern const uint16_t tone[94];
 
 #endif
 
