@@ -3,7 +3,13 @@
 
 #include <stdint.h>
 
-extern const uint16_t tone[94];
+typedef struct {
+  uint16_t *buf;
+  int buf_len;
+} Tone;
+
+extern const Tone tones[12];
+
 
 #endif
 

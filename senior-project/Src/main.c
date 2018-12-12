@@ -44,8 +44,7 @@
 
 #include <string.h>
 #include <math.h>
-#define M_PI 3.14159265358979323846f
-#include "midi.h"
+#include "tones.h"
 
 /* USER CODE END Includes */
 
@@ -61,6 +60,13 @@ UART_HandleTypeDef huart5;
 /* USER CODE BEGIN PV */
 
 uint8_t uart_buf[1];
+
+#define DAC_BUF_LEN 512
+uint16_t dac_buf[DAC_BUF_LEN];
+volatile uint16_t *dac_ptr;
+
+volatile int dac_wait = 0;
+volatile int dac_lower = 0;
 
 /* USER CODE END PV */
 
@@ -116,14 +122,25 @@ int main(void)
   MX_UART5_Init();
   /* USER CODE BEGIN 2 */
 
+  dac_ptr = &dac_buf[0];
+
   // DMA.
   HAL_TIM_Base_Start(&htim6);
   HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
-  HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t *) dma_buf, DMA_BUF_LEN, DAC_ALIGN_12B_R);
+  HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t *) dac_ptr, DAC_BUF_LEN, DAC_ALIGN_12B_R);
 
   // UART interrupts.
   memset(uart_buf, 0, sizeof(uart_buf));
   HAL_UART_Receive_IT(&huart5, uart_buf, sizeof(uart_buf));
+
+  // Generate a test buffer.
+#define X_LEN 300
+  static uint16_t x[X_LEN];
+  for (int i = 0; i < X_LEN; i++) {
+#define M_PI 3.14159265358979323846f
+    float angle = 2.0f*M_PI * (float) i/X_LEN;
+    x[i] = (sinf(angle) + 1.0f)/2.0f * 4095;
+  }
 
   /* USER CODE END 2 */
 
@@ -135,9 +152,26 @@ int main(void)
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
-		
-		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
-    HAL_Delay(500);
+
+    // Wait for a DAC interrupt to reset dac_wait.
+    dac_wait = 1;
+    while (dac_wait) __WFI();
+
+    // Switch the dac_ptr to the other half of the buffer.
+    if (dac_lower) dac_ptr = &dac_buf[0];
+    else           dac_ptr = &dac_buf[DAC_BUF_LEN/2];
+
+    // Write the tone.
+    static int j = 0;
+    for (int i = 0; i < DAC_BUF_LEN/2; i++) {
+      dac_ptr[i] = x[(j + i) % X_LEN];
+    }
+    j = (j + DAC_BUF_LEN/2) % X_LEN;
+
+    // Stop it from saturating.
+    for (int i = 0; i < DAC_BUF_LEN/2; i++) {
+      dac_ptr[i] /= 3;
+    }
 
   }
   /* USER CODE END 3 */
@@ -330,19 +364,29 @@ static void MX_GPIO_Init(void)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 
-  // Update midi_count.
-  if (uart_buf[0] >> 7) midi_count = 0;
-  else                  midi_count++;
-
-  // Set note.
-  if (midi_count == 1) note = uart_buf[0] % 12;
-  else if (midi_count == 2 && uart_buf[0] == 0) note = 12;
-
-  // Light up LED if a note is being pressed.
-  if (note == 12) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
-  else            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
 
   HAL_UART_Receive_IT(&huart5, uart_buf, sizeof(uart_buf));
+
+}
+
+void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
+
+  // Set LED to indicate error condition.
+  if (dac_wait == 0) HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
+
+  dac_lower = 1;
+  dac_wait = 0;
+
+}
+
+void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
+
+  // Set LED to indicate error condition.
+  if (dac_wait == 0) HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
+
+  dac_lower = 0;
+  dac_wait = 0;
 
 }
 
