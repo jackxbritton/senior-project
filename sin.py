@@ -4,7 +4,21 @@ import sys
 import numpy as np
 import matplotlib.pyplot as plt
 
-#frequencies = a4 * 2**(np.arange(0, 12)/12)
+n = 256
+t = np.arange(0, n) / n
+x = (np.sin(2*np.pi*t) + 1)/2 * 4096
+
+plt.plot(t, x)
+plt.show()
+for i in x:
+    print('  %d,' % i)
+print(len(x))
+sys.exit()
+
+
+
+
+
 
 # Define a few constants.
 resolution = 4096
@@ -13,23 +27,27 @@ arr = 2047
 sample_rate = timer_frequency / (arr + 1)
 sample_period = 1 / sample_rate
 
-# Try to generate an a4.
-a4 = 440
-f = a4
+# Start at a1 (55Hz) and go up to g#2.
+a1 = 55
+frequencies = a1 * 2**(np.arange(0, 12)/12)
 
-# How many samples do we need?
-n = sample_rate / f
-t = np.arange(0, n) / n
-x = (np.sin(2*np.pi*t) + 1)/2 * resolution
-x = x.astype(int)
+for i, f in enumerate(frequencies):
 
-#plt.plot(t*n, x)
-#plt.show()
+    # How many samples do we need?
+    n = sample_rate / f
+    t = np.arange(0, n) / n
+    x = (np.sin(2*np.pi*t) + 1)/2 * resolution
+    x = x.astype(int)
 
-# TODO Print out as C code.
-
-print('const uint16_t tone[%d] = {' % len(t))
-for v in x:
-    print('  {:d},'.format(v))
-print('}')
+    # Print out as C code.
+    print('const uint16_t tone%d[%d] = {' % (i, len(t)))
+    for j, v in enumerate(x):
+        sys.stdout.write(' %d' % v)
+        if j != len(x)-1:
+            sys.stdout.write(', ')
+        if j % 8 == 0 and j != 0:
+            print('')
+    print('')
+    print('};')
+    print('')
 
