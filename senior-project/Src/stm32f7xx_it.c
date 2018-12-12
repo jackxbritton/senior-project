@@ -38,12 +38,9 @@
 /* USER CODE BEGIN 0 */
 
 #include <string.h>
+#include "midi.h"
 #include "tones.h"
-#include <math.h>
 
-#define DMA_BUF_LEN 1024 // TODO Header file
-extern uint16_t dma_buf[DMA_BUF_LEN];
-//extern int tone;
 extern DAC_HandleTypeDef hdac;
 
 /* USER CODE END 0 */
@@ -213,7 +210,16 @@ void DMA1_Stream5_IRQHandler(void)
   HAL_DMA_IRQHandler(&hdma_dac1);
   /* USER CODE BEGIN DMA1_Stream5_IRQn 1 */
 
-  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14);
+  // Populate dma_buf.
+  memset(dma_buf, 0, sizeof(dma_buf));
+  if (note != 12) {
+    // TODO Optimize with memcpy.
+    int tone_len = sizeof(tone) / sizeof(uint16_t);
+    for (int i = 0; i < DMA_BUF_LEN; i++) {
+      dma_buf[i] = tone[(f_counter + i) % tone_len];
+    }
+    f_counter = (f_counter + DMA_BUF_LEN) % tone_len;
+  }
 
   HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t *) dma_buf, DMA_BUF_LEN, DAC_ALIGN_12B_R);
 
