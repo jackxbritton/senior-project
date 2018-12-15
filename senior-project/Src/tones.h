@@ -4,8 +4,8 @@
 #include <stdint.h>
 
 typedef struct {
-  uint16_t *buf;
-  int buf_len;
+  const uint16_t *buf;
+  const int buf_len;
 } Tone;
 
 extern const Tone tones[12];
