@@ -4,28 +4,11 @@ import sys
 import numpy as np
 import matplotlib.pyplot as plt
 
-n = 256
-t = np.arange(0, n) / n
-x = (np.sin(2*np.pi*t) + 1)/2 * 4096
-
-plt.plot(t, x)
-plt.show()
-for i in x:
-    print('  %d,' % i)
-print(len(x))
-sys.exit()
-
-
-
-
-
-
 # Define a few constants.
 resolution = 4096
 timer_frequency = 84e6
 arr = 2047
 sample_rate = timer_frequency / (arr + 1)
-sample_period = 1 / sample_rate
 
 # Start at a1 (55Hz) and go up to g#2.
 a1 = 55

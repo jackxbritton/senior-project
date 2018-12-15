@@ -1,5 +1,48 @@
 #include "tones.h"
+#include <stdlib.h>
+#include <math.h>
+#define M_PI 3.14159265358979323846264338327950288f
 
+int generate_octave(
+  AudioBuffer bufs[12],
+  float timer_clock_frequency,
+  int arr,
+  float f0
+) {
+
+  float sample_rate = timer_clock_frequency / (arr + 1);
+
+  // Calculate the buffer sizes.
+  // Each of these will hold a complete sine wave.
+  int total_len = 0;
+  for (int i = 0; i < 12; i++) {
+    float f = f0 * powf(2, (float) i/12);
+    bufs[i].buf_len = sample_rate / f;
+    total_len += bufs[i].buf_len;
+  }
+
+  // Allocate memory.
+  float *buf = malloc(total_len * sizeof(float));
+  if (buf == NULL) return 0;
+  
+  int counter = 0;
+  for (int i = 0; i < 12; i++) {
+    bufs[i].buf = &buf[counter];
+    counter += bufs[i].buf_len;
+  }
+
+  // Fill each buffer with a sine wave.
+  for (int i = 0; i < 12; i++) {
+    for (int j = 0; j < bufs[i].buf_len; j++) {
+      bufs[i].buf[j] = sinf(2*M_PI * (float) j/bufs[i].buf_len);
+    }
+  }
+
+  return 1;
+
+}
+
+/*
 uint16_t tone0[746] = {
  2048,  2065,  2082,  2099,  2117,  2134,  2151,  2168,  2185, 
  2203,  2220,  2237,  2254,  2271,  2289,  2306,  2323, 
@@ -886,4 +929,5 @@ const Tone tones[12] = {
   { tone10, sizeof(tone10)/sizeof(uint16_t) },
   { tone11, sizeof(tone11)/sizeof(uint16_t) }
 };
+*/
 

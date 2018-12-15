@@ -134,6 +134,15 @@ int main(void)
 
   dac_ptr = &dac_buf[0];
 
+  // TODO Initialize tones.
+  AudioBuffer bufs[12];
+  if (generate_octave(bufs, 84e6f, 2047, 1760.0f) == 0) {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+    while (1);
+  }
+
   // DMA.
   HAL_TIM_Base_Start(&htim6);
   HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
@@ -167,6 +176,7 @@ int main(void)
     // First, zero the buffer.
     for (int i = 0; i < DAC_BUF_LEN/2; i++) dac_ptr[i] = 0;
 
+    /*
     // Iterate over the pressed keys.
     // We want to keep track of the number of notes pressed,
     // as well as the sum of the velocity scales,
@@ -205,6 +215,7 @@ int main(void)
       dac_ptr[i] *= normalizing_factor;
       //dac_ptr[i] /= 3; // Stop saturation.
     }
+    */
 
   }
   /* USER CODE END 3 */
