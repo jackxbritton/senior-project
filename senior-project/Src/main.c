@@ -62,7 +62,7 @@ UART_HandleTypeDef huart5;
 
 uint8_t uart_buf[1];
 
-#define DAC_BUF_LEN 512
+#define DAC_BUF_LEN 4096
 uint16_t dac_buf[DAC_BUF_LEN];
 volatile uint16_t *dac_ptr;
 
@@ -168,7 +168,6 @@ int main(void)
     for (int i = 0; i < DAC_BUF_LEN/2; i++) dac_ptr[i] = 0;
 
     // Iterate over the pressed keys.
-    int num_notes = 0;
     for (int key = 0; key < KEYS_LEN; key++) {
       if (keys[key].pressed == 0) continue;
 
@@ -184,14 +183,16 @@ int main(void)
       }
       keys[key].counter = (keys[key].counter + skip*DAC_BUF_LEN/2) % buf_len;
 
-      num_notes++;
-
     }
 
-    // Normalize by num_notes.
+    // Normalize the signal.
+    int max = 0;
     for (int i = 0; i < DAC_BUF_LEN/2; i++) {
-      dac_ptr[i] /= num_notes;
-      dac_ptr[i] /= 2; // Stop saturation.
+      if (max < dac_ptr[i]) max = dac_ptr[i];
+    }
+    for (int i = 0; i < DAC_BUF_LEN/2; i++) {
+      dac_ptr[i] *= (float) 4096/max;
+      dac_ptr[i] /= 3; // Stop saturation.
     }
 
   }
