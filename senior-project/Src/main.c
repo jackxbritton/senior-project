@@ -70,7 +70,7 @@ volatile int dac_wait = 0;
 volatile int dac_lower = 0;
 
 struct Key {
-  int pressed;
+  int velocity;
   int counter;
 };
 
@@ -168,8 +168,13 @@ int main(void)
     for (int i = 0; i < DAC_BUF_LEN/2; i++) dac_ptr[i] = 0;
 
     // Iterate over the pressed keys.
+    // We want to keep track of the number of notes pressed,
+    // as well as the sum of the velocity scales,
+    // for signal normalization later.
+    int num_notes = 0;
+    float total_velocity_scale = 0.0f;
     for (int key = 0; key < KEYS_LEN; key++) {
-      if (keys[key].pressed == 0) continue;
+      if (keys[key].velocity == 0) continue;
 
       // Get the tone and the octave skip.
       uint16_t *buf = tones[key % 12].buf;
@@ -178,21 +183,27 @@ int main(void)
       for (int i = 0; i < key/12; i++) skip *= 2;
 
       // Add the tone into the buffer, and update the counter!
+      float velocity_scale = log2f(keys[key].velocity) / 7.0f;
       for (int i = 0; i < DAC_BUF_LEN/2; i++) {
-        dac_ptr[i] += buf[(keys[key].counter + skip*i) % buf_len];
+        uint16_t value = buf[(keys[key].counter + skip*i) % buf_len];
+        dac_ptr[i] += value * velocity_scale;
       }
       keys[key].counter = (keys[key].counter + skip*DAC_BUF_LEN/2) % buf_len;
 
+      num_notes++;
+      total_velocity_scale += velocity_scale;
+
     }
 
+    // For normalization, divide the total velocity scale
+    // by the total *potential* velocity scale,
+    // and num_notes a second time to normalize for multiple keys.
+    float normalizing_factor = total_velocity_scale / (num_notes*num_notes);
+
     // Normalize the signal.
-    int max = 0;
     for (int i = 0; i < DAC_BUF_LEN/2; i++) {
-      if (max < dac_ptr[i]) max = dac_ptr[i];
-    }
-    for (int i = 0; i < DAC_BUF_LEN/2; i++) {
-      dac_ptr[i] *= (float) 4096/max;
-      dac_ptr[i] /= 3; // Stop saturation.
+      dac_ptr[i] *= normalizing_factor;
+      //dac_ptr[i] /= 3; // Stop saturation.
     }
 
   }
@@ -410,9 +421,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
       int i = key - KEYS_BASE;
       if (i >= 0 && i < KEYS_LEN) {
         if (type == note_on && velocity > 0) {
-          keys[i].pressed = 1;
+          keys[i].velocity = velocity;
         } else {
-          keys[i].pressed = 0;
+          keys[i].velocity = 0;
           keys[i].counter = 0;
         }
       }
