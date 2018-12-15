@@ -68,6 +68,8 @@ volatile uint16_t *dac_ptr;
 volatile int dac_wait = 0;
 volatile int dac_lower = 0;
 
+volatile int note = -1;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -133,15 +135,6 @@ int main(void)
   memset(uart_buf, 0, sizeof(uart_buf));
   HAL_UART_Receive_IT(&huart5, uart_buf, sizeof(uart_buf));
 
-  // Generate a test buffer.
-#define X_LEN 300
-  static uint16_t x[X_LEN];
-  for (int i = 0; i < X_LEN; i++) {
-#define M_PI 3.14159265358979323846f
-    float angle = 2.0f*M_PI * (float) i/X_LEN;
-    x[i] = (sinf(angle) + 1.0f)/2.0f * 4095;
-  }
-
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -162,15 +155,26 @@ int main(void)
     else           dac_ptr = &dac_buf[DAC_BUF_LEN/2];
 
     // Write the tone.
-    static int j = 0;
-    for (int i = 0; i < DAC_BUF_LEN/2; i++) {
-      dac_ptr[i] = x[(j + i) % X_LEN];
-    }
-    j = (j + DAC_BUF_LEN/2) % X_LEN;
+    if (note == -1) {
+      for (int i = 0; i < DAC_BUF_LEN/2; i++) dac_ptr[i] = 0;
+    } else {
 
-    // Stop it from saturating.
-    for (int i = 0; i < DAC_BUF_LEN/2; i++) {
-      dac_ptr[i] /= 3;
+      uint16_t *buf = tones[note % 12].buf;
+      int buf_len = tones[note % 12].buf_len;
+      int skip = 1;
+      for (int i = 0; i < note/12; i++) skip *= 2;
+
+      static int j = 0;
+      for (int i = 0; i < DAC_BUF_LEN/2; i++) {
+        dac_ptr[i] = buf[(j + skip*i) % buf_len];
+      }
+      j = (j + skip*DAC_BUF_LEN/2) % buf_len;
+
+      // Stop it from saturating.
+      for (int i = 0; i < DAC_BUF_LEN/2; i++) {
+        dac_ptr[i] /= 2;
+      }
+
     }
 
   }
@@ -364,7 +368,12 @@ static void MX_GPIO_Init(void)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 
-  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
+  // Do some MIDI stuff.
+  static int midi_count;
+  if (uart_buf[0] >> 7) midi_count = 0;
+  if (midi_count == 1) note = uart_buf[0] - 33;
+  else if (midi_count == 2 && uart_buf[0] == 0) note = -1;
+  midi_count++;
 
   HAL_UART_Receive_IT(&huart5, uart_buf, sizeof(uart_buf));
 
