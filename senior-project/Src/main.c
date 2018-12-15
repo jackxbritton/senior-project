@@ -74,7 +74,9 @@ struct Key {
   int counter;
 };
 
-volatile struct Key keys[60];
+#define KEYS_BASE 33
+#define KEYS_LEN 96
+volatile struct Key keys[KEYS_LEN];
 
 /* USER CODE END PV */
 
@@ -167,7 +169,7 @@ int main(void)
 
     // Iterate over the pressed keys.
     int num_notes = 0;
-    for (int key = 0; key < 60; key++) {
+    for (int key = 0; key < KEYS_LEN; key++) {
       if (keys[key].pressed == 0) continue;
 
       // Get the tone and the octave skip.
@@ -404,8 +406,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
       velocity = uart_buf[0];
 
       // Last byte, so handle the message.
-      int i = key - 33;
-      if (i >= 0 && i < 60) {
+      int i = key - KEYS_BASE;
+      if (i >= 0 && i < KEYS_LEN) {
         if (type == note_on && velocity > 0) {
           keys[i].pressed = 1;
         } else {
