@@ -42,6 +42,7 @@
 
 /* USER CODE BEGIN Includes */
 
+#include <stdint.h>
 #include <string.h>
 #include <math.h>
 #include "tones.h"
@@ -68,7 +69,12 @@ volatile uint16_t *dac_ptr;
 volatile int dac_wait = 0;
 volatile int dac_lower = 0;
 
-volatile int note = -1;
+struct Key {
+  int pressed;
+  int counter;
+};
+
+volatile struct Key keys[60];
 
 /* USER CODE END PV */
 
@@ -154,27 +160,36 @@ int main(void)
     if (dac_lower) dac_ptr = &dac_buf[0];
     else           dac_ptr = &dac_buf[DAC_BUF_LEN/2];
 
-    // Write the tone.
-    if (note == -1) {
-      for (int i = 0; i < DAC_BUF_LEN/2; i++) dac_ptr[i] = 0;
-    } else {
+    // Write the tones.
 
-      uint16_t *buf = tones[note % 12].buf;
-      int buf_len = tones[note % 12].buf_len;
+    // First, zero the buffer.
+    for (int i = 0; i < DAC_BUF_LEN/2; i++) dac_ptr[i] = 0;
+
+    // Iterate over the pressed keys.
+    int num_notes = 0;
+    for (int key = 0; key < 60; key++) {
+      if (keys[key].pressed == 0) continue;
+
+      // Get the tone and the octave skip.
+      uint16_t *buf = tones[key % 12].buf;
+      int buf_len = tones[key % 12].buf_len;
       int skip = 1;
-      for (int i = 0; i < note/12; i++) skip *= 2;
+      for (int i = 0; i < key/12; i++) skip *= 2;
 
-      static int j = 0;
+      // Add the tone into the buffer, and update the counter!
       for (int i = 0; i < DAC_BUF_LEN/2; i++) {
-        dac_ptr[i] = buf[(j + skip*i) % buf_len];
+        dac_ptr[i] += buf[(keys[key].counter + skip*i) % buf_len];
       }
-      j = (j + skip*DAC_BUF_LEN/2) % buf_len;
+      keys[key].counter = (keys[key].counter + skip*DAC_BUF_LEN/2) % buf_len;
 
-      // Stop it from saturating.
-      for (int i = 0; i < DAC_BUF_LEN/2; i++) {
-        dac_ptr[i] /= 2;
-      }
+      num_notes++;
 
+    }
+
+    // Normalize by num_notes.
+    for (int i = 0; i < DAC_BUF_LEN/2; i++) {
+      dac_ptr[i] /= num_notes;
+      dac_ptr[i] /= 2; // Stop saturation.
     }
 
   }
@@ -369,11 +384,41 @@ static void MX_GPIO_Init(void)
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 
   // Do some MIDI stuff.
-  static int midi_count;
-  if (uart_buf[0] >> 7) midi_count = 0;
-  if (midi_count == 1) note = uart_buf[0] - 33;
-  else if (midi_count == 2 && uart_buf[0] == 0) note = -1;
+  const uint8_t note_on = 0x09, note_off = 0x08;
+  static int midi_count = 0;
+  static uint8_t type, key, velocity;
+
+  if (uart_buf[0] >> 7) {
+
+    // New event.
+    midi_count = 0;
+    type = uart_buf[0] >> 4;
+
+  } else if (type == note_on || type == note_off) {
+
+    // In the case of a note on or off event,
+    // handle the second and third bytes.
+    if (midi_count == 1) {
+      key = uart_buf[0];
+    } else if (midi_count == 2) {
+      velocity = uart_buf[0];
+
+      // Last byte, so handle the message.
+      int i = key - 33;
+      if (i >= 0 && i < 60) {
+        if (type == note_on && velocity > 0) {
+          keys[i].pressed = 1;
+        } else {
+          keys[i].pressed = 0;
+          keys[i].counter = 0;
+        }
+      }
+    }
+  }
+
   midi_count++;
+
+  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
 
   HAL_UART_Receive_IT(&huart5, uart_buf, sizeof(uart_buf));
 
