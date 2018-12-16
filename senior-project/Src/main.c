@@ -45,6 +45,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
 #include "tones.h"
 
 /* USER CODE END Includes */
@@ -60,9 +61,11 @@ UART_HandleTypeDef huart5;
 
 /* USER CODE BEGIN PV */
 
+uint8_t malloc_mempool[64 * 1024];
+
 uint8_t uart_buf[1];
 
-#define DAC_BUF_LEN 4096
+#define DAC_BUF_LEN 10
 uint16_t dac_buf[DAC_BUF_LEN];
 volatile uint16_t *dac_ptr;
 
@@ -75,7 +78,7 @@ struct Key {
 };
 
 #define KEYS_BASE 33
-#define KEYS_LEN 96
+#define KEYS_LEN 4
 volatile struct Key keys[KEYS_LEN];
 volatile float volume = 1.0f;
 
@@ -133,6 +136,14 @@ int main(void)
   MX_UART5_Init();
   /* USER CODE BEGIN 2 */
 
+  // TODO Test memory.
+  uint8_t *x = malloc(512);
+  if (x == NULL) {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+    while (1);
+  }
+  while (1);
+
   dac_ptr = &dac_buf[0];
 
   // DMA.
@@ -158,55 +169,6 @@ int main(void)
     // Wait for a DAC interrupt to reset dac_wait.
     dac_wait = 1;
     while (dac_wait) __WFI();
-
-    // Switch the dac_ptr to the other half of the buffer.
-    if (dac_lower) dac_ptr = &dac_buf[0];
-    else           dac_ptr = &dac_buf[DAC_BUF_LEN/2];
-
-    // Write the tones.
-
-    // First, zero the buffer.
-    for (int i = 0; i < DAC_BUF_LEN/2; i++) dac_ptr[i] = 0;
-
-    // Iterate over the pressed keys.
-    // We want to keep track of the number of notes pressed,
-    // as well as the sum of the amplitudes,
-    // for signal normalization later.
-    int num_notes = 0;
-    float total_amplitude = 0.0f;
-    for (int key = 0; key < KEYS_LEN; key++) {
-      if (keys[key].velocity == 0) continue;
-
-      float amplitude = log2f(keys[key].velocity) / 7.0f;
-
-      // Get the tone and the octave skip.
-      const uint16_t *buf = tones[key % 12].buf;
-      const int buf_len = tones[key % 12].buf_len;
-      int skip = 1;
-      for (int i = 0; i < key/12; i++) skip *= 2;
-
-      // Add the tone into the buffer, and update the counter!
-      for (int i = 0; i < DAC_BUF_LEN/2; i++) {
-        uint16_t value = buf[(keys[key].counter + skip*i) % buf_len];
-        dac_ptr[i] += value * amplitude;
-      }
-      keys[key].counter = (keys[key].counter + skip*DAC_BUF_LEN/2) % buf_len;
-
-      num_notes++;
-      total_amplitude += amplitude;
-
-    }
-
-    // For normalization, divide the total velocity scale
-    // by the total *potential* velocity scale,
-    // and num_notes a second time to normalize for multiple keys.
-    float normalizing_factor = total_amplitude / (num_notes*num_notes);
-
-    // Normalize the signal.
-    for (int i = 0; i < DAC_BUF_LEN/2; i++) {
-      dac_ptr[i] *= normalizing_factor * volume;
-      dac_ptr[i] /= 3; // Stop saturation.
-    }
 
     HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
 
@@ -406,75 +368,14 @@ typedef enum {
 } MidiEventType;
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-
-  // Do some MIDI stuff.
-  static MidiEventType type;
-  static int midi_count = 0;
-  static uint8_t key;
-
-  if (uart_buf[0] >> 7) {
-
-    // New event.
-    midi_count = 0;
-    if (uart_buf[0] >> 4 == 0x08) type = MIDI_EVENT_NOTE_OFF;
-    else if (uart_buf[0] >> 4 == 0x09) type = MIDI_EVENT_NOTE_ON;
-    else if (uart_buf[0] == 0xbf) type = MIDI_EVENT_VOLUME;
-
-  } else if (type == MIDI_EVENT_NOTE_OFF || type == MIDI_EVENT_NOTE_ON) {
-
-    // In the case of a note on or off event,
-    // handle the second and third bytes.
-    if (midi_count == 1) {
-      key = uart_buf[0];
-    } else if (midi_count == 2) {
-      uint8_t velocity = uart_buf[0];
-
-      // Last byte, so handle the message.
-      int i = key - KEYS_BASE;
-      if (i >= 0 && i < KEYS_LEN) {
-        if (type == MIDI_EVENT_NOTE_ON && velocity > 0) {
-          keys[i].velocity = velocity;
-        } else {
-          keys[i].velocity = 0;
-          keys[i].counter = 0;
-        }
-      }
-    }
-  } else if (type == MIDI_EVENT_VOLUME) {
-
-    // Only care about final byte.
-    if (midi_count == 2) {
-      volume = (float) uart_buf[0] / 127;
-    }
-
-  }
-
-  midi_count++;
-
   HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
-
   HAL_UART_Receive_IT(&huart5, uart_buf, sizeof(uart_buf));
-
 }
 
 void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
-
-  // Set LED to indicate error condition.
-  if (dac_wait == 0) HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
-
-  dac_lower = 1;
-  dac_wait = 0;
-
 }
 
 void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
-
-  // Set LED to indicate error condition.
-  if (dac_wait == 0) HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
-
-  dac_lower = 0;
-  dac_wait = 0;
-
 }
 
 /* USER CODE END 4 */
