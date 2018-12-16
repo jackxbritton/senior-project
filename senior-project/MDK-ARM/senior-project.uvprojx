@@ -392,11 +392,6 @@
           <GroupName>Application/User</GroupName>
           <Files>
             <File>
-              <FileName>tones.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Src\tones.c</FilePath>
-            </File>
-            <File>
               <FileName>main.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Src/main.c</FilePath>

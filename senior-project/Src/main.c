@@ -42,10 +42,10 @@
 
 /* USER CODE BEGIN Includes */
 
-#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "tones.h"
+#define M_PI 3.1415926535897932384626433832795028841971693993751058209749445923078164062f
 
 /* USER CODE END Includes */
 
@@ -61,6 +61,11 @@ UART_HandleTypeDef huart5;
 /* USER CODE BEGIN PV */
 
 uint8_t uart_buf[1];
+
+typedef struct {
+  uint16_t *buffer;
+  size_t size;
+} AudioBuffer;
 
 #define DAC_BUF_LEN 4096
 uint16_t dac_buf[DAC_BUF_LEN];
@@ -133,6 +138,37 @@ int main(void)
   MX_UART5_Init();
   /* USER CODE BEGIN 2 */
 
+  // Initialize tones.
+  AudioBuffer tones[12];
+
+  const float clock_timer_frequency = 84e6f;
+  const int arr = 2047;
+  const float sample_rate = clock_timer_frequency / (arr + 1);
+  const float f0 = 55.0f;
+  const int resolution = 4095;
+
+  for (int i = 0; i < 12; i++) {
+    
+    // Calculate the buffer size for a complete sine wave at the frequency.
+    float f = f0 * powf(2.0f, (float) i/12);
+    tones[i].size = roundf(sample_rate / f);
+
+    // Allocate it.
+    tones[i].buffer = malloc(tones[i].size * sizeof(uint16_t));
+    if (tones[i].buffer == NULL) {
+      for (int j = 0; j < i; j++) free(tones[j].buffer);
+      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+      while (1);
+    }
+
+    // Fill the buffer.
+    for (int j = 0; j < tones[i].size; j++) {
+      float angle = 2*M_PI * (float) j/tones[i].size;
+      tones[i].buffer[j] = roundf(resolution * (sinf(angle) + 1.0f)/2.0f);
+    }
+
+  }
+
   dac_ptr = &dac_buf[0];
 
   // DMA.
@@ -180,17 +216,16 @@ int main(void)
       float amplitude = log2f(keys[key].velocity) / 7.0f;
 
       // Get the tone and the octave skip.
-      const uint16_t *buf = tones[key % 12].buf;
-      const int buf_len = tones[key % 12].buf_len;
+      AudioBuffer *tone = &tones[key % 12];
       int skip = 1;
       for (int i = 0; i < key/12; i++) skip *= 2;
 
       // Add the tone into the buffer, and update the counter!
       for (int i = 0; i < DAC_BUF_LEN/2; i++) {
-        uint16_t value = buf[(keys[key].counter + skip*i) % buf_len];
+        uint16_t value = tone->buffer[(keys[key].counter + skip*i) % tone->size];
         dac_ptr[i] += value * amplitude;
       }
-      keys[key].counter = (keys[key].counter + skip*DAC_BUF_LEN/2) % buf_len;
+      keys[key].counter = (keys[key].counter + skip*DAC_BUF_LEN/2) % tone->size;
 
       num_notes++;
       total_amplitude += amplitude;
