@@ -75,15 +75,24 @@ MidiInterpreter midi_interpreter;
 volatile int dac_wait = 0;
 volatile int dac_lower = 0;
 
+// Each key contains a velocity (0 if the key is off),
+// and a counter used when writing the key's tone
+// out to the DMA/DAC buffer.
+// Velocity goes from 0 to 127 and is copied directly from the MIDI event.
 struct Key {
-  int velocity;
+  uint8_t velocity;
   int counter;
 };
 
+// Define an array of keys.
+// KEYS_BASE is the MIDI note number of the first key in the array,
+// and KEYS_LEN is the number of keys in the array.
 #define KEYS_BASE 33
 #define KEYS_LEN 96
 volatile struct Key keys[KEYS_LEN];
-volatile float volume = 1.0f;
+
+// Volume goes from 0 to 127 and is copied directly from the MIDI event.
+volatile uint8_t volume = 127;
 
 /* USER CODE END PV */
 
@@ -175,7 +184,7 @@ int main(void)
     dac_wait = 1;
     while (dac_wait) __WFI();
 
-    // Set the dac_ptr to whichever half of the buffer,
+    // Set the dac_ptr to one half of the buffer,
     // according to the dac_lower flag.
     uint16_t *dac_ptr = dac_lower
                       ? &dac_buf.buffer[0]
@@ -187,22 +196,22 @@ int main(void)
     for (int i = 0; i < dac_buf.length/2; i++) dac_ptr[i] = 0;
 
     // Iterate over the pressed keys.
-    // We want to keep track of the number of notes pressed,
-    // as well as the sum of the amplitudes,
-    // for signal normalization later.
     int num_notes = 0;
     float total_amplitude = 0.0f;
     for (int key = 0; key < KEYS_LEN; key++) {
       if (keys[key].velocity == 0) continue;
 
+      // The tone's amplitude is logarithmic of the key's velocity.
+      // Many MIDI instruments implement amplitude this way.
       float amplitude = log2f(keys[key].velocity) / 7.0f;
 
-      // Get the tone and the octave skip.
+      // Find which tone we're interested in
+      // and how many samples to skip for the octave.
       AudioBuffer *tone = &tones[key % 12];
       int skip = 1;
       for (int i = 0; i < key/12; i++) skip *= 2;
 
-      // Add the tone into the buffer and update the counter.
+      // Add the tone into the buffer and update the key's counter.
       for (int i = 0; i < dac_buf.length/2; i++) {
         uint16_t value = tone->buffer[(keys[key].counter + skip*i) % tone->length];
         dac_ptr[i] += value * amplitude;
@@ -214,18 +223,27 @@ int main(void)
 
     }
 
-    // For normalization, divide the total amplitude
-    // by the total *potential* amplitude, considering max_num_notes.
-    // If the number of notes exceeds the maximum,
-    // divide by it to prevent saturation.
+    // Normalization is tricky. If you normalize by the maximum value, it's not
+    // satisfying because the signal should get *louder* as you press more
+    // notes. The solution I found is to divide by a soft 'maximum number of
+    // notes' when the notes pressed is lower than the maximum, and otherwise
+    // scale according to the actual number of notes.
     const int max_num_notes = 6;
-    int divisor = num_notes > max_num_notes ? num_notes : max_num_notes;
-    float normalizing_factor = total_amplitude / (num_notes * divisor);
+    float normalizing_factor;
+    if (num_notes <= max_num_notes) {
+      normalizing_factor = total_amplitude / (max_num_notes * num_notes);
+    } else {
+      normalizing_factor = total_amplitude / (num_notes * num_notes);
+    }
+
+    // Also multiply by the volume. We're using a logarithmic scale because it
+    // feels more correct on the physical keyboard.
+    float volume_scale = log2f(volume) / 7.0f;
 
     // Normalize the signal.
     for (int i = 0; i < dac_buf.length/2; i++) {
 
-      dac_ptr[i] *= normalizing_factor * volume;
+      dac_ptr[i] *= normalizing_factor * volume_scale;
 
       // Stop saturation on the top and bottom.
       // I measured these values with the Digilent.
@@ -451,7 +469,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
       break;
 
     case MIDI_EVENT_VOLUME:
-      volume = log2f(event->data.volume) / 7.0f;
+      volume = event->data.volume;
       break;
 
     }
