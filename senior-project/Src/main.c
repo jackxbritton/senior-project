@@ -47,6 +47,7 @@
 #include <math.h>
 #include "midi.h"
 #include "tones.h"
+#include "log2_normalize.h"
 
 /* USER CODE END Includes */
 
@@ -149,17 +150,20 @@ int main(void)
 
   // Initialize the DAC DMA buffer.
   AudioBuffer dac_buf;
-  dac_buf.length = 4096;
+  dac_buf.length = 2048;
   dac_buf.buffer = malloc(dac_buf.length * sizeof(uint16_t));
   if (dac_buf.buffer == NULL) _Error_Handler(__FILE__, __LINE__);
 
   // Initialize the tones.
   AudioBuffer tones[12];
   const float clock_timer_frequency = 108e6f;
-  const int arr = 255;
+  const int arr = 1023;
   const float fs = clock_timer_frequency / (arr + 1);
   const float f0 = 55.0f;
   if (!init_tones(tones, f0, fs)) _Error_Handler(__FILE__, __LINE__);
+
+  // Initialize the log2_normalize function.
+  log2_normalize_init();
 
   // DMA.
   HAL_TIM_Base_Start(&htim6);
@@ -203,7 +207,7 @@ int main(void)
 
       // The tone's amplitude is logarithmic of the key's velocity.
       // Many MIDI instruments implement amplitude this way.
-      float amplitude = log2f(keys[key].velocity) / 7.0f;
+      float amplitude = log2_normalize(keys[key].velocity);
 
       // Find which tone we're interested in
       // and how many samples to skip for the octave.
@@ -238,7 +242,7 @@ int main(void)
 
     // Also multiply by the volume. We're using a logarithmic scale because it
     // feels more correct on the physical keyboard.
-    float volume_scale = log2f(volume) / 7.0f;
+    float volume_scale = log2_normalize(volume);
 
     // Normalize the signal.
     for (int i = 0; i < dac_buf.length/2; i++) {
@@ -367,7 +371,7 @@ static void MX_TIM6_Init(void)
   htim6.Instance = TIM6;
   htim6.Init.Prescaler = 0;
   htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim6.Init.Period = 255;
+  htim6.Init.Period = 1023;
   htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
   {
@@ -490,7 +494,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
 
   // Set LED to indicate error condition.
-  if (dac_wait == 0) HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
+  if (dac_wait == 0) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
 
   dac_lower = 1;
   dac_wait = 0;
@@ -500,7 +504,7 @@ void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
 void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
 
   // Set LED to indicate error condition.
-  if (dac_wait == 0) HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
+  if (dac_wait == 0) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
 
   dac_lower = 0;
   dac_wait = 0;

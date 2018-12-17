@@ -416,6 +416,11 @@
               <FileType>1</FileType>
               <FilePath>../Src/stm32f7xx_hal_msp.c</FilePath>
             </File>
+            <File>
+              <FileName>log2_normalize.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\log2_normalize.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
