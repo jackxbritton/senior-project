@@ -337,7 +337,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F746xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Inc;              ../Drivers/STM32F7xx_HAL_Driver/Inc;              ../Drivers/STM32F7xx_HAL_Driver/Inc/Legacy;              ../Drivers/CMSIS/Device/ST/STM32F7xx/Include;              ../Drivers/CMSIS/Include</IncludePath>
+              <IncludePath>../Inc;                ../Drivers/STM32F7xx_HAL_Driver/Inc;                ../Drivers/STM32F7xx_HAL_Driver/Inc/Legacy;                ../Drivers/CMSIS/Device/ST/STM32F7xx/Include;                ../Drivers/CMSIS/Include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -392,6 +392,16 @@
           <GroupName>Application/User</GroupName>
           <Files>
             <File>
+              <FileName>midi.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\midi.c</FilePath>
+            </File>
+            <File>
+              <FileName>tones.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\tones.c</FilePath>
+            </File>
+            <File>
               <FileName>main.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Src/main.c</FilePath>
@@ -405,16 +415,6 @@
               <FileName>stm32f7xx_hal_msp.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Src/stm32f7xx_hal_msp.c</FilePath>
-            </File>
-            <File>
-              <FileName>midi.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Src\midi.c</FilePath>
-            </File>
-            <File>
-              <FileName>tones.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Src\tones.c</FilePath>
             </File>
           </Files>
         </Group>
