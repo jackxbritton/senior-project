@@ -62,7 +62,7 @@ UART_HandleTypeDef huart5;
 /* USER CODE BEGIN PV */
 
 // uart_buf is the buffer for receiving MIDI data byte-by-byte.
-uint8_t uart_buf[1];
+volatile uint8_t uart_buf[1];
 
 // midi_interpreter (included from midi.h) is used to interpret MIDI data
 // in the UART interrupt handler.
@@ -144,9 +144,8 @@ int main(void)
   dac_buf.buffer = malloc(dac_buf.length * sizeof(uint16_t));
   if (dac_buf.buffer == NULL) _Error_Handler(__FILE__, __LINE__);
 
-  // Initialize tones.
+  // Initialize the tones.
   AudioBuffer tones[12];
-
   const float clock_timer_frequency = 84e6f;
   const int arr = 2047;
   const float fs = clock_timer_frequency / (arr + 1);
@@ -159,8 +158,7 @@ int main(void)
   HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t *) dac_buf.buffer, dac_buf.length, DAC_ALIGN_12B_R);
 
   // UART interrupts.
-  memset(uart_buf, 0, sizeof(uart_buf));
-  HAL_UART_Receive_IT(&huart5, uart_buf, sizeof(uart_buf));
+  HAL_UART_Receive_IT(&huart5, (uint8_t *) uart_buf, sizeof(uart_buf));
 
   /* USER CODE END 2 */
 
@@ -431,37 +429,36 @@ static void MX_GPIO_Init(void)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 
+  int i;
+
   // Step the MIDI interpreter.
-  // If it returns 0, there was no new event to read.
-  if (!midi_step(&midi_interpreter, uart_buf[0])) {
-    HAL_UART_Receive_IT(&huart5, uart_buf, sizeof(uart_buf));
-    return;
-  }
+  MidiEvent *event = midi_step(&midi_interpreter, uart_buf[0]);
 
-  // Cool, inspect the event.
-  uint8_t type = midi_interpreter.buf[0] >> 4;
-  if (type == 0x08 || type == 0x09) {
+  if (event != NULL) {
 
-    // It's a note on or note down event.
-    // The second byte is the key,
-    // the third is the velocity.
-    int key = midi_interpreter.buf[1];
-    int i = key - KEYS_BASE;
-    if (i >= 0 && i < KEYS_LEN) {
-      if (type == 0x08) keys[i].velocity = 0;
-      else              keys[i].velocity = midi_interpreter.buf[2];
+    // Cool, inspect the event.
+    switch (event->type) {
+    case MIDI_EVENT_NOTE:
+
+      // If it's a note event, update the velocity of the key in the keys array.
+      i = event->data.note.key - KEYS_BASE;
+      if (i >= 0 && i < KEYS_LEN) {
+        keys[i].velocity = event->data.note.velocity;
+      }
+
+      // Also write to an LED for fun.
+      HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
+      break;
+
+    case MIDI_EVENT_VOLUME:
+      volume = log2f(event->data.volume) / 7.0f;
+      break;
+
     }
 
-  } else if (type == 0x0b) {
-
-    // It's a volume event.
-    volume = log2f(midi_interpreter.buf[2]) / 7.0f;
-
   }
 
-  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
-
-  HAL_UART_Receive_IT(&huart5, uart_buf, sizeof(uart_buf));
+  HAL_UART_Receive_IT(&huart5, (uint8_t *) uart_buf, sizeof(uart_buf));
 
 }
 

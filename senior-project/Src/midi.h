@@ -3,28 +3,49 @@
 
 #include <stdint.h>
 
-// MidiInterpreter doesn't actually do much,
-// you just feed it bytes until it tells you it's
-// read a full MIDI event.
+// MidiEventType is an enum for MIDI event types.
+// These two are the only ones we support.
+// They are also not one-to-one with the MIDI spec.
+typedef enum {
+  MIDI_EVENT_NOTE, // Represents both note on and note off.
+  MIDI_EVENT_VOLUME
+} MidiEventType;
 
-// Zero to initialize!
-
+// MidiEvent is a tagged union for MIDI event data.
+// This is the poor man's polymorphism.
 typedef struct {
 
-  // Read buf up to count to interpret the event.
+  MidiEventType type;
+
+  union {
+
+      // MIDI_EVENT_NOTE.
+      struct {
+        uint8_t key;
+        uint8_t velocity;
+      } note;
+
+      // MIDI_EVENT_VOLUME.
+      uint8_t volume;
+
+  } data;
+
+} MidiEvent;
+
+// To initialize a MidiInterpreter instance,
+// just make sure it's zeroed.
+// Its contents should *not* be accessed outside of midi_step.
+typedef struct {
   uint8_t buf[3];
-  int count;
-
-  // Don't touch this!
-  int spec_size;
-
+  int buf_count;
+  int event_size;
+  MidiEvent event;
 } MidiInterpreter;
 
-// midi_step advances the interpreter with a byte of input.
-// It returns 1 when the event has been completed,
-// and 0 otherwise.
-// If 1 is returned, read mi->buf up to mi->count for the data.
-int midi_step(MidiInterpreter *mi, uint8_t byte);
+// midi_step advances an interpreter with a byte of input.
+// It returns a pointer to an event when one is ready,
+// and NULL otherwise.
+MidiEvent *midi_step(MidiInterpreter *mi, uint8_t byte);
 
 #endif
 
