@@ -45,7 +45,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#define M_PI 3.1415926535897932384626433832795028841971693993751058209749445923078164062f
+#include "midi.h"
+#include "tones.h"
 
 /* USER CODE END Includes */
 
@@ -60,17 +61,17 @@ UART_HandleTypeDef huart5;
 
 /* USER CODE BEGIN PV */
 
+// uart_buf is the buffer for receiving MIDI data byte-by-byte.
 uint8_t uart_buf[1];
 
-typedef struct {
-  uint16_t *buffer;
-  size_t size;
-} AudioBuffer;
+// midi_interpreter (included from midi.h) is used to interpret MIDI data
+// in the UART interrupt handler.
+MidiInterpreter midi_interpreter;
 
-#define DAC_BUF_LEN 4096
-uint16_t dac_buf[DAC_BUF_LEN];
-volatile uint16_t *dac_ptr;
-
+// Global DMA/DAC flags.
+// dac_wait is set to 0 when either half of the DMA/DAC buffer has finished
+// being outputted.
+// dac_lower indicates which half of the buffer was last written.
 volatile int dac_wait = 0;
 volatile int dac_lower = 0;
 
@@ -95,7 +96,6 @@ static void MX_TIM6_Init(void);
 static void MX_UART5_Init(void);
 
 /* USER CODE BEGIN PFP */
-/* Private function prototypes -----------------------------------------------*/
 
 /* USER CODE END PFP */
 
@@ -138,43 +138,25 @@ int main(void)
   MX_UART5_Init();
   /* USER CODE BEGIN 2 */
 
+  // Initialize the DAC DMA buffer.
+  AudioBuffer dac_buf;
+  dac_buf.length = 4096;
+  dac_buf.buffer = malloc(dac_buf.length * sizeof(uint16_t));
+  if (dac_buf.buffer == NULL) _Error_Handler(__FILE__, __LINE__);
+
   // Initialize tones.
   AudioBuffer tones[12];
 
   const float clock_timer_frequency = 84e6f;
   const int arr = 2047;
-  const float sample_rate = clock_timer_frequency / (arr + 1);
+  const float fs = clock_timer_frequency / (arr + 1);
   const float f0 = 55.0f;
-  const int resolution = 4095;
-
-  for (int i = 0; i < 12; i++) {
-    
-    // Calculate the buffer size for a complete sine wave at the frequency.
-    float f = f0 * powf(2.0f, (float) i/12);
-    tones[i].size = roundf(sample_rate / f);
-
-    // Allocate it.
-    tones[i].buffer = malloc(tones[i].size * sizeof(uint16_t));
-    if (tones[i].buffer == NULL) {
-      for (int j = 0; j < i; j++) free(tones[j].buffer);
-      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
-      while (1);
-    }
-
-    // Fill the buffer.
-    for (int j = 0; j < tones[i].size; j++) {
-      float angle = 2*M_PI * (float) j/tones[i].size;
-      tones[i].buffer[j] = roundf(resolution * (sinf(angle) + 1.0f)/2.0f);
-    }
-
-  }
-
-  dac_ptr = &dac_buf[0];
+  if (!init_tones(tones, f0, fs)) _Error_Handler(__FILE__, __LINE__);
 
   // DMA.
   HAL_TIM_Base_Start(&htim6);
   HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
-  HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t *) dac_buf, DAC_BUF_LEN, DAC_ALIGN_12B_R);
+  HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t *) dac_buf.buffer, dac_buf.length, DAC_ALIGN_12B_R);
 
   // UART interrupts.
   memset(uart_buf, 0, sizeof(uart_buf));
@@ -195,14 +177,16 @@ int main(void)
     dac_wait = 1;
     while (dac_wait) __WFI();
 
-    // Switch the dac_ptr to the other half of the buffer.
-    if (dac_lower) dac_ptr = &dac_buf[0];
-    else           dac_ptr = &dac_buf[DAC_BUF_LEN/2];
+    // Set the dac_ptr to whichever half of the buffer,
+    // according to the dac_lower flag.
+    uint16_t *dac_ptr = dac_lower
+                      ? &dac_buf.buffer[0]
+                      : &dac_buf.buffer[dac_buf.length/2];
 
     // Write the tones.
 
     // First, zero the buffer.
-    for (int i = 0; i < DAC_BUF_LEN/2; i++) dac_ptr[i] = 0;
+    for (int i = 0; i < dac_buf.length/2; i++) dac_ptr[i] = 0;
 
     // Iterate over the pressed keys.
     // We want to keep track of the number of notes pressed,
@@ -220,29 +204,40 @@ int main(void)
       int skip = 1;
       for (int i = 0; i < key/12; i++) skip *= 2;
 
-      // Add the tone into the buffer, and update the counter!
-      for (int i = 0; i < DAC_BUF_LEN/2; i++) {
-        uint16_t value = tone->buffer[(keys[key].counter + skip*i) % tone->size];
+      // Add the tone into the buffer and update the counter.
+      for (int i = 0; i < dac_buf.length/2; i++) {
+        uint16_t value = tone->buffer[(keys[key].counter + skip*i) % tone->length];
         dac_ptr[i] += value * amplitude;
       }
-      keys[key].counter = (keys[key].counter + skip*DAC_BUF_LEN/2) % tone->size;
+      keys[key].counter = (keys[key].counter + skip*dac_buf.length/2) % tone->length;
 
       num_notes++;
       total_amplitude += amplitude;
 
     }
 
-    // For normalization, divide the total velocity scale
-    // by the total *potential* velocity scale,
-    // and num_notes a second time to normalize for multiple keys.
-    float normalizing_factor = total_amplitude / (num_notes*num_notes);
+    // For normalization, divide the total amplitude
+    // by the total *potential* amplitude, considering max_num_notes.
+    // If the number of notes exceeds the maximum,
+    // divide by it to prevent saturation.
+    const int max_num_notes = 6;
+    int divisor = num_notes > max_num_notes ? num_notes : max_num_notes;
+    float normalizing_factor = total_amplitude / (num_notes * divisor);
 
     // Normalize the signal.
-    for (int i = 0; i < DAC_BUF_LEN/2; i++) {
+    for (int i = 0; i < dac_buf.length/2; i++) {
+
       dac_ptr[i] *= normalizing_factor * volume;
-      dac_ptr[i] /= 3; // Stop saturation.
+
+      // Stop saturation on the top and bottom.
+      // I measured these values with the Digilent.
+      const float bottom = 0.07f / 3.3f,
+                  top = 3.1f / 3.3f;
+      dac_ptr[i] = 4095*bottom + dac_ptr[i]*(top - bottom);
+
     }
 
+    // Heartbeat LED.
     HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
 
   }
@@ -434,57 +429,35 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-typedef enum {
-  MIDI_EVENT_NOTE_OFF,
-  MIDI_EVENT_NOTE_ON,
-  MIDI_EVENT_VOLUME
-} MidiEventType;
-
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 
-  // Do some MIDI stuff.
-  static MidiEventType type;
-  static int midi_count = 0;
-  static uint8_t key;
-
-  if (uart_buf[0] >> 7) {
-
-    // New event.
-    midi_count = 0;
-    if (uart_buf[0] >> 4 == 0x08) type = MIDI_EVENT_NOTE_OFF;
-    else if (uart_buf[0] >> 4 == 0x09) type = MIDI_EVENT_NOTE_ON;
-    else if (uart_buf[0] == 0xbf) type = MIDI_EVENT_VOLUME;
-
-  } else if (type == MIDI_EVENT_NOTE_OFF || type == MIDI_EVENT_NOTE_ON) {
-
-    // In the case of a note on or off event,
-    // handle the second and third bytes.
-    if (midi_count == 1) {
-      key = uart_buf[0];
-    } else if (midi_count == 2) {
-      uint8_t velocity = uart_buf[0];
-
-      // Last byte, so handle the message.
-      int i = key - KEYS_BASE;
-      if (i >= 0 && i < KEYS_LEN) {
-        if (type == MIDI_EVENT_NOTE_ON && velocity > 0) {
-          keys[i].velocity = velocity;
-        } else {
-          keys[i].velocity = 0;
-          keys[i].counter = 0;
-        }
-      }
-    }
-  } else if (type == MIDI_EVENT_VOLUME) {
-
-    // Only care about final byte.
-    if (midi_count == 2) {
-      volume = (float) uart_buf[0] / 127;
-    }
-
+  // Step the MIDI interpreter.
+  // If it returns 0, there was no new event to read.
+  if (!midi_step(&midi_interpreter, uart_buf[0])) {
+    HAL_UART_Receive_IT(&huart5, uart_buf, sizeof(uart_buf));
+    return;
   }
 
-  midi_count++;
+  // Cool, inspect the event.
+  uint8_t type = midi_interpreter.buf[0] >> 4;
+  if (type == 0x08 || type == 0x09) {
+
+    // It's a note on or note down event.
+    // The second byte is the key,
+    // the third is the velocity.
+    int key = midi_interpreter.buf[1];
+    int i = key - KEYS_BASE;
+    if (i >= 0 && i < KEYS_LEN) {
+      if (type == 0x08) keys[i].velocity = 0;
+      else              keys[i].velocity = midi_interpreter.buf[2];
+    }
+
+  } else if (type == 0x0b) {
+
+    // It's a volume event.
+    volume = log2f(midi_interpreter.buf[2]) / 7.0f;
+
+  }
 
   HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
 
@@ -523,10 +496,10 @@ void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
 void _Error_Handler(char *file, int line)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  while(1)
-  {
-  }
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+  while(1);
   /* USER CODE END Error_Handler_Debug */
 }
 
