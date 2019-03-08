@@ -45,6 +45,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdbool.h>
 
 /* USER CODE END Includes */
 
@@ -60,14 +61,16 @@ UART_HandleTypeDef huart5;
 /* USER CODE BEGIN PV */
 
 // uart_buf is the buffer for receiving MIDI data byte-by-byte.
-volatile uint8_t uart_buf[1];
+#define UART_CAP 256
+volatile uint8_t uart_buf[UART_CAP];
+volatile int uart_head, uart_tail;
 
 // Global DMA/DAC flags.
 // dac_wait is set to 0 when either half of the DMA/DAC buffer has finished
 // being outputted.
 // dac_lower indicates which half of the buffer was last written.
-volatile int dac_wait = 0;
-volatile int dac_lower = 0;
+volatile bool dac_wait = false;
+volatile bool dac_lower = false;
 
 /* USER CODE END PV */
 
@@ -133,7 +136,7 @@ int main(void)
 	HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t *) dac_buf, dac_size, DAC_ALIGN_12B_R);
 
 	// UART interrupts.
-	HAL_UART_Receive_IT(&huart5, (uint8_t *) uart_buf, sizeof(uart_buf));
+	HAL_UART_Receive_IT(&huart5, (uint8_t *) &uart_buf[uart_head], 1);
 
 	/* USER CODE END 2 */
 
@@ -147,11 +150,55 @@ int main(void)
 	/* USER CODE BEGIN 3 */
 
 		// Wait for a DAC interrupt to reset dac_wait.
-		dac_wait = 1;
+		dac_wait = true;
 		while (dac_wait) __WFI();
 
+		// Read bytes from UART and accumulate complete MIDI events in midi_buf.
+
+#define MIDI_CAP 8
+		static uint8_t midi_buf[MIDI_CAP];
+		static int midi_len;
+
+		static int note = -1;
+
+		for (; uart_head != uart_tail; uart_head = (uart_head+1) % UART_CAP) {
+
+			// If there's a leading one, it's a new MIDI event,
+			// so handle the old one and reset midi_len.
+			if (uart_buf[uart_head] >> 7) {
+
+				if (midi_len == 3) {
+
+					//HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14);
+
+					if ((midi_buf[0] >> 4) == 0x08) {
+
+						// Note off.
+
+					} else if ((midi_buf[0] >> 4) == 0x09) {
+
+						// Note on.
+
+					}
+
+				}
+
+				midi_len = 0;
+
+			}
+
+			// Push byte onto midi_buf.
+			if (midi_len < MIDI_CAP) midi_buf[midi_len] = uart_buf[uart_head];
+			midi_len++;
+
+		}
+
+		uint16_t *dac_ptr = dac_lower ? &dac_buf[0] : &dac_buf[dac_size/2];
+
+		for (int i = 0; i < dac_size/2; i++) dac_ptr[i] = 0;
+
 		// Heartbeat LED.
-		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
+		//HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
 
 	}
 	/* USER CODE END 3 */
@@ -351,29 +398,39 @@ static void MX_GPIO_Init(void)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 
-		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14);
-	HAL_UART_Receive_IT(&huart5, (uint8_t *) uart_buf, sizeof(uart_buf));
+	if (uart_buf[0] >> 7) {
 
+		//HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
+
+		uint8_t byte = uart_buf[0];
+
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
+		if (byte & 0x10) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+		if (byte & 0x08) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+		if (byte & 0x20) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+
+	}
+	HAL_UART_Receive_IT(&huart5, (uint8_t *) &uart_buf[0], 1);
+
+	/*
+	// Increment uart_tail and request the next byte.
+	uart_tail = (uart_tail+1) % UART_CAP;
+	HAL_UART_Receive_IT(&huart5, (uint8_t *) &uart_buf[uart_tail], 1);
+	*/
 }
 
 void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
-
-	// Set LED to indicate error condition.
-	if (dac_wait == 0) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
-
-	dac_lower = 1;
-	dac_wait = 0;
-
+	if (dac_wait == false) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+	dac_lower = true;
+	dac_wait = false;
 }
 
 void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
-
-	// Set LED to indicate error condition.
-	if (dac_wait == 0) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
-
-	dac_lower = 0;
-	dac_wait = 0;
-
+	if (dac_wait == false) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+	dac_lower = false;
+	dac_wait = false;
 }
 
 /* USER CODE END 4 */
