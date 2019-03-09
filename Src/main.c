@@ -76,7 +76,8 @@ volatile bool dac_lower = false;
 
 typedef struct {
 	uint8_t number, velocity;
-	int counter, period;
+	float frequency;
+	int counter;
 	int envelope_counter;
 } Note;
 
@@ -136,7 +137,7 @@ int main(void)
 	MX_GFXSIMULATOR_Init();
 	/* USER CODE BEGIN 2 */
 
-	const int fs = 108e6 / 1024;
+	const int fs = roundf(108e6 / (htim6.Init.Period + 1));
 
 	// Initialize the DAC DMA buffer.
 	int dac_size = 2048;
@@ -150,6 +151,42 @@ int main(void)
 
 	// UART interrupts.
 	HAL_UART_Receive_IT(&huart5, (uint8_t *) &uart_buf[uart_head], 1);
+
+	// Precomputed sine table.
+#define SINE_RES 4096
+	float sine[SINE_RES];
+	for (int i = 0; i < SINE_RES; i++) {
+		sine[i] = sinf(2.0f*M_PI * (float) i/SINE_RES);
+	}
+
+	// Precomputed table for exponential pitch bending.
+	float pow2[128];
+	for (int i = 0; i < 128; i++) {
+		pow2[i] = powf(2.0f, (i - 64) / 64.0f);
+	}
+
+	// Precomputed note frequencies.
+	float note_frequencies[128];
+	for (int i = 0; i < 128; i++) {
+		note_frequencies[i] = 55.0f * powf(2.0f, (i - 13)/12.0f);
+	}
+
+	// Read bytes from UART and accumulate complete MIDI events in midi_buf.
+#define MIDI_CAP 8
+	uint8_t midi_buf[MIDI_CAP];
+	int midi_len = 0;
+
+	// Active notes are tracked in the notes array.
+#define NOTES_CAP 16
+	Note notes[NOTES_CAP];
+	int notes_len = 0;
+
+	// We also track the volume.
+	float volume = 1.0f;
+	float pitch_bend = 1.0f;
+
+	const int attack = 0.0f * fs;
+	const int release = 0.2f * fs;
 
 	/* USER CODE END 2 */
 
@@ -166,22 +203,6 @@ int main(void)
 		dac_wait = true;
 		while (dac_wait) __WFI();
 
-		// Read bytes from UART and accumulate complete MIDI events in midi_buf.
-#define MIDI_CAP 8
-		static uint8_t midi_buf[MIDI_CAP];
-		static int midi_len;
-
-		// Active notes are tracked in the notes array.
-#define NOTES_CAP 16
-		static Note notes[NOTES_CAP];
-		static int notes_len;
-
-		// We also track the volume.
-		static float volume = 1.0f;
-
-		const int attack = 0.0f * fs;
-		const int release = 0.25f * fs;
-
 		for (; uart_head != uart_tail; uart_head = (uart_head+1) % UART_CAP) {
 
 			// Reset midi_len if it's a new event.
@@ -192,8 +213,10 @@ int main(void)
 			midi_len++;
 
 			// Parse events.
+			// All the events we care about are 3 bytes long.
+			if (midi_len != 3) continue;
 
-			if ((midi_buf[0] >> 4) == 0x09 && midi_len == 3) {
+			if ((midi_buf[0] >> 4) == 0x09) {
 
 				// Note on event.
 
@@ -205,27 +228,27 @@ int main(void)
 					for (int i = 0; i < notes_len; i++) {
 						if (notes[i].number == number && notes[i].velocity > 0) {
 							notes[i].velocity = 0;
-							// TODO Update the envelope_counter to account for an unfinished attack stage.
+							// Update the envelope_counter to account for an unfinished attack stage.
 							if (notes[i].envelope_counter < attack) {
 								notes[i].envelope_counter = release * ((float) (attack - notes[i].envelope_counter) / attack);
 							} else {
 								notes[i].envelope_counter = 0;
 							}
+							break;
 						}
 					}
 				} else {
 					// If there's space, push the note onto the array.
-					if (notes_len < NOTES_CAP) {
+					if (notes_len < NOTES_CAP && number < 128) {
 						notes[notes_len].number = number;
 						notes[notes_len].velocity = velocity;
+						notes[notes_len].frequency = note_frequencies[number];
 						notes[notes_len].counter = 0;
-						float f = 55.0f * powf(2.0f, (number - 13)/12.0f);
-						notes[notes_len].period = roundf(fs / f);
 						notes[notes_len].envelope_counter = 0;
 						notes_len++;
 					}
 				}
-			} else if ((midi_buf[0] >> 4) == 0x08 && midi_len == 3) {
+			} else if ((midi_buf[0] >> 4) == 0x08) {
 
 				// Note off event.
 
@@ -238,13 +261,14 @@ int main(void)
 					}
 				}
 
-			} else if ((midi_buf[0] >> 4) == 0x0b && midi_len == 3) {
-
-				// Control change. We only implement volume change.
-				if (midi_buf[1] == 0x07) {
-					volume = log2f(midi_buf[2]) / 7.0f;
+			} else if ((midi_buf[0] >> 4) == 0x0b && midi_buf[1] == 0x07) {
+				// Volume change.
+				volume = log2f(midi_buf[2]) / 7.0f;
+			} else if ((midi_buf[0] >> 4) == 0xe) {
+				// Pitch bending.
+				if (midi_buf[2] < 128) {
+					pitch_bend = pow2[midi_buf[2]];
 				}
-
 			}
 
 		}
@@ -257,8 +281,7 @@ int main(void)
 			float acc = 0.0f;
 			for (int j = 0; j < notes_len; j++) {
 
-				float phase = (float) notes[j].counter / notes[j].period;
-
+				/*
 				// Compute the volume envelope.
 				float envelope;
 				if (notes[j].velocity > 0) {
@@ -279,13 +302,31 @@ int main(void)
 						envelope = (float) (release - notes[j].envelope_counter) / release;
 					}
 				}
+				*/
 
-				acc += envelope * (sinf(2.0f*M_PI*phase) + 1.0f)/2.0f;
-				//acc += envelope * phase;
-				notes[j].counter = (notes[j].counter + 1) % notes[j].period;
+				// TODO
+				if (notes[j].velocity == 0 && notes[j].envelope_counter > release) {
+					// This note has expired, so remove it from the array and continue.
+					// It's the ol' swap-and-pop.
+					notes[j] = notes[notes_len-1];
+					notes_len--;
+					j--;
+					continue;
+				}
+				float envelope = 1.0f;
+
+				float f = notes[j].frequency * pitch_bend;
+				if (f == 0.0f) continue;
+				int period = roundf(fs / f);
+				if (period == 0) continue;
+				float phase = (float) notes[j].counter / period;
+
+				//acc += envelope * (sine[(int) roundf(phase*SINE_RES)] + 1.0f)/2.0f;
+				acc += envelope * phase;
+				notes[j].counter = (notes[j].counter + 1) % period;
 				notes[j].envelope_counter++;
 			}
-			acc /= 25.0f;
+			acc /= 100.0f;
 			acc *= volume;
 			dac_ptr[i] = UINT16_MAX * acc;
 		}
@@ -497,8 +538,11 @@ static void MX_GPIO_Init(void)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	// Increment uart_tail and request the next byte.
-	uart_tail = (uart_tail+1) % UART_CAP;
-	HAL_UART_Receive_IT(&huart5, (uint8_t *) &uart_buf[uart_tail], 1);
+	int new_tail = (uart_tail+1) % UART_CAP;
+	if (new_tail != uart_head) {
+		uart_tail = new_tail;
+		HAL_UART_Receive_IT(&huart5, (uint8_t *) &uart_buf[uart_tail], 1);
+	}
 }
 
 void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
@@ -525,6 +569,9 @@ void _Error_Handler(char *file, int line)
 {
 	/* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
 	while(1)
 	{
 	}

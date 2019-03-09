@@ -22,7 +22,7 @@ TARGET = senior-project
 # debug build?
 DEBUG = 1
 # optimization
-OPT = -Og
+OPT =
 
 
 #######################################
