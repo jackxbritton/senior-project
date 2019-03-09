@@ -74,6 +74,11 @@ volatile int uart_head, uart_tail;
 volatile bool dac_wait = false;
 volatile bool dac_lower = false;
 
+typedef struct {
+	uint8_t number, velocity;
+	int counter;
+} Note;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -166,40 +171,60 @@ int main(void)
 		static uint8_t midi_buf[MIDI_CAP];
 		static int midi_len;
 
+		// Active notes are tracked in the notes array.
+#define NOTES_CAP 16
+		static Note notes[NOTES_CAP];
+		static int notes_len;
+
 		for (; uart_head != uart_tail; uart_head = (uart_head+1) % UART_CAP) {
 
-			// If there's a leading one, it's a new MIDI event,
-			// so handle the old one and reset midi_len.
-			if (uart_buf[uart_head] >> 7) {
-
-				if (midi_len == 3) {
-
-					if ((midi_buf[0] >> 4) == 0x08) {
-
-						// Note off.
-
-					} else if ((midi_buf[0] >> 4) == 0x09) {
-
-						// Note on.
-						HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
-
-					}
-
-				}
-
-				midi_len = 0;
-
-			}
+			// Reset midi_len if it's a new event.
+			if (uart_buf[uart_head] >> 7) midi_len = 0;
 
 			// Push byte onto midi_buf.
 			if (midi_len < MIDI_CAP) midi_buf[midi_len] = uart_buf[uart_head];
 			midi_len++;
+
+			// Parse events.
+
+			if ((midi_buf[0] >> 4) == 0x09 && midi_len == 3) {
+
+				uint8_t   number = midi_buf[1],
+						velocity = midi_buf[2];
+
+				if (velocity == 0) {
+					// Find the note in the array and set the velocity to zero.
+					for (int i = 0; i < notes_len; i++) {
+						if (notes[i].number == number && notes[i].velocity > 0) {
+							notes[i].velocity = 0;
+						}
+					}
+				} else {
+					// If there's space, push the note onto the array.
+					if (notes_len < NOTES_CAP) {
+						notes[notes_len].number = number;
+						notes[notes_len].velocity = velocity;
+						notes[notes_len].counter = 0;
+						notes_len++;
+					}
+				}
+			}
 
 		}
 
 		uint16_t *dac_ptr = dac_lower ? &dac_buf[0] : &dac_buf[dac_size/2];
 
 		for (int i = 0; i < dac_size/2; i++) dac_ptr[i] = 0;
+
+		// Remove expired notes from the array.
+		// It's the ol' swap-and-pop.
+		for (int i = 0; i < notes_len; i++) {
+			if (notes[i].velocity == 0) {
+				notes[i] = notes[notes_len-1];
+				notes_len--;
+				i--;
+			}
+		}
 
 		// Heartbeat LED.
 		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
