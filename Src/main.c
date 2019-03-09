@@ -77,6 +77,7 @@ volatile bool dac_lower = false;
 typedef struct {
 	uint8_t number, velocity;
 	int counter, period;
+	int envelope_counter;
 } Note;
 
 /* USER CODE END PV */
@@ -175,6 +176,12 @@ int main(void)
 		static Note notes[NOTES_CAP];
 		static int notes_len;
 
+		// We also track the volume.
+		static float volume = 1.0f;
+
+		const int attack = 0.0f * fs;
+		const int release = 0.25f * fs;
+
 		for (; uart_head != uart_tail; uart_head = (uart_head+1) % UART_CAP) {
 
 			// Reset midi_len if it's a new event.
@@ -188,14 +195,22 @@ int main(void)
 
 			if ((midi_buf[0] >> 4) == 0x09 && midi_len == 3) {
 
-				uint8_t   number = midi_buf[1],
-						velocity = midi_buf[2];
+				// Note on event.
+
+				uint8_t number = midi_buf[1],
+				      velocity = midi_buf[2];
 
 				if (velocity == 0) {
 					// Find the note in the array and set the velocity to zero.
 					for (int i = 0; i < notes_len; i++) {
 						if (notes[i].number == number && notes[i].velocity > 0) {
 							notes[i].velocity = 0;
+							// TODO Update the envelope_counter to account for an unfinished attack stage.
+							if (notes[i].envelope_counter < attack) {
+								notes[i].envelope_counter = release * ((float) (attack - notes[i].envelope_counter) / attack);
+							} else {
+								notes[i].envelope_counter = 0;
+							}
 						}
 					}
 				} else {
@@ -206,9 +221,30 @@ int main(void)
 						notes[notes_len].counter = 0;
 						float f = 55.0f * powf(2.0f, (number - 13)/12.0f);
 						notes[notes_len].period = roundf(fs / f);
+						notes[notes_len].envelope_counter = 0;
 						notes_len++;
 					}
 				}
+			} else if ((midi_buf[0] >> 4) == 0x08 && midi_len == 3) {
+
+				// Note off event.
+
+				// Find the note in the array and set the velocity to zero.
+				uint8_t number = midi_buf[1];
+				for (int i = 0; i < notes_len; i++) {
+					if (notes[i].number == number && notes[i].velocity > 0) {
+						notes[i].velocity = 0;
+						notes[i].envelope_counter = 0;
+					}
+				}
+
+			} else if ((midi_buf[0] >> 4) == 0x0b && midi_len == 3) {
+
+				// Control change. We only implement volume change.
+				if (midi_buf[1] == 0x07) {
+					volume = log2f(midi_buf[2]) / 7.0f;
+				}
+
 			}
 
 		}
@@ -220,23 +256,38 @@ int main(void)
 		for (int i = 0; i < dac_size/2; i++) {
 			float acc = 0.0f;
 			for (int j = 0; j < notes_len; j++) {
-				float phase = (float) notes[j].counter / notes[j].period;
-				//acc += (sinf(2.0f*M_PI*phase) + 1.0f)/2.0f;
-				acc += phase;
-				notes[j].counter = (notes[j].counter + 1) % notes[j].period;
-			}
-			acc /= 50.0f;
-			dac_ptr[i] = UINT16_MAX * acc;
-		}
 
-		// Remove expired notes from the array.
-		// It's the ol' swap-and-pop.
-		for (int i = 0; i < notes_len; i++) {
-			if (notes[i].velocity == 0) {
-				notes[i] = notes[notes_len-1];
-				notes_len--;
-				i--;
+				float phase = (float) notes[j].counter / notes[j].period;
+
+				// Compute the volume envelope.
+				float envelope;
+				if (notes[j].velocity > 0) {
+					if (notes[j].envelope_counter > attack) {
+						envelope = 1.0f;
+					} else {
+						envelope = (float) notes[j].envelope_counter / attack;
+					}
+				} else {
+					if (notes[j].envelope_counter > release) {
+						// This note has expired, so remove it from the array and continue.
+						// It's the ol' swap-and-pop.
+						notes[j] = notes[notes_len-1];
+						notes_len--;
+						j--;
+						continue;
+					} else {
+						envelope = (float) (release - notes[j].envelope_counter) / release;
+					}
+				}
+
+				acc += envelope * (sinf(2.0f*M_PI*phase) + 1.0f)/2.0f;
+				//acc += envelope * phase;
+				notes[j].counter = (notes[j].counter + 1) % notes[j].period;
+				notes[j].envelope_counter++;
 			}
+			acc /= 25.0f;
+			acc *= volume;
+			dac_ptr[i] = UINT16_MAX * acc;
 		}
 
 		// Heartbeat LED.
