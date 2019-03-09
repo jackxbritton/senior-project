@@ -63,7 +63,7 @@ UART_HandleTypeDef huart5;
 /* Private variables ---------------------------------------------------------*/
 
 // uart_buf is the buffer for receiving MIDI data byte-by-byte.
-#define UART_CAP 256
+#define UART_CAP 64
 volatile uint8_t uart_buf[UART_CAP];
 volatile int uart_head, uart_tail;
 
@@ -186,7 +186,7 @@ int main(void)
 	float pitch_bend = 1.0f;
 
 	const int attack = 0.0f * fs;
-	const int release = 0.2f * fs;
+	const int release = 0.0f * fs;
 
 	/* USER CODE END 2 */
 
@@ -276,44 +276,32 @@ int main(void)
 		// Use dac_lower to figure out with half of the buffer to operate on.
 		uint16_t *dac_ptr = dac_lower ? &dac_buf[0] : &dac_buf[dac_size/2];
 
+		// Compute envelopes.
+		float envelopes[notes_len][dac_size/2];
+		for (int i = 0; i < notes_len; i++) {
+			if (notes[i].velocity > 0) {
+				int j;
+				for (j = 0; j < dac_size/2 && notes[i].envelope_counter < attack; j++, notes[i].envelope_counter++) {
+					envelopes[i][j] = (float) notes[i].envelope_counter / attack;
+				}
+				for (; j < dac_size/2; j++) {
+					envelopes[i][j] = 1.0f;
+				}
+			} else {
+				int j;
+				for (j = 0; j < dac_size/2 && notes[i].envelope_counter < release; j++, notes[i].envelope_counter++) {
+					envelopes[i][j] = (float) (release - notes[i].envelope_counter) / release;
+				}
+				for (; j < dac_size/2; j++) {
+					envelopes[i][j] = 0.0f;
+				}
+			}
+		}
+
 		// Synthesize the signal.
 		for (int i = 0; i < dac_size/2; i++) {
 			float acc = 0.0f;
 			for (int j = 0; j < notes_len; j++) {
-
-				/*
-				// Compute the volume envelope.
-				float envelope;
-				if (notes[j].velocity > 0) {
-					if (notes[j].envelope_counter > attack) {
-						envelope = 1.0f;
-					} else {
-						envelope = (float) notes[j].envelope_counter / attack;
-					}
-				} else {
-					if (notes[j].envelope_counter > release) {
-						// This note has expired, so remove it from the array and continue.
-						// It's the ol' swap-and-pop.
-						notes[j] = notes[notes_len-1];
-						notes_len--;
-						j--;
-						continue;
-					} else {
-						envelope = (float) (release - notes[j].envelope_counter) / release;
-					}
-				}
-				*/
-
-				// TODO
-				if (notes[j].velocity == 0 && notes[j].envelope_counter > release) {
-					// This note has expired, so remove it from the array and continue.
-					// It's the ol' swap-and-pop.
-					notes[j] = notes[notes_len-1];
-					notes_len--;
-					j--;
-					continue;
-				}
-				float envelope = 1.0f;
 
 				float f = notes[j].frequency * pitch_bend;
 				if (f == 0.0f) continue;
@@ -321,14 +309,24 @@ int main(void)
 				if (period == 0) continue;
 				float phase = (float) notes[j].counter / period;
 
-				//acc += envelope * (sine[(int) roundf(phase*SINE_RES)] + 1.0f)/2.0f;
-				acc += envelope * phase;
+				acc += envelopes[j][i] * (sine[(int) roundf(phase*SINE_RES)] + 1.0f)/2.0f;
+				//acc += envelopes[j][i] * phase;
 				notes[j].counter = (notes[j].counter + 1) % period;
 				notes[j].envelope_counter++;
 			}
 			acc /= 100.0f;
 			acc *= volume;
 			dac_ptr[i] = UINT16_MAX * acc;
+		}
+
+		// Remove expired notes.
+		for (int i = 0; i < notes_len; i++) {
+			if (notes[i].velocity == 0 && notes[i].envelope_counter >= release) {
+				// Remove it from the array with the ol' swap-and-pop.
+				notes[i] = notes[notes_len-1];
+				notes_len--;
+				i--;
+			}
 		}
 
 		// Heartbeat LED.
