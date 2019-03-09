@@ -76,7 +76,7 @@ volatile bool dac_lower = false;
 
 typedef struct {
 	uint8_t number, velocity;
-	int counter;
+	int counter, period;
 } Note;
 
 /* USER CODE END PV */
@@ -135,7 +135,7 @@ int main(void)
 	MX_GFXSIMULATOR_Init();
 	/* USER CODE BEGIN 2 */
 
-	const fs = 108e6 / 1024;
+	const int fs = 108e6 / 1024;
 
 	// Initialize the DAC DMA buffer.
 	int dac_size = 2048;
@@ -166,7 +166,6 @@ int main(void)
 		while (dac_wait) __WFI();
 
 		// Read bytes from UART and accumulate complete MIDI events in midi_buf.
-
 #define MIDI_CAP 8
 		static uint8_t midi_buf[MIDI_CAP];
 		static int midi_len;
@@ -205,6 +204,8 @@ int main(void)
 						notes[notes_len].number = number;
 						notes[notes_len].velocity = velocity;
 						notes[notes_len].counter = 0;
+						float f = 55.0f * powf(2.0f, (number - 13)/12.0f);
+						notes[notes_len].period = roundf(fs / f);
 						notes_len++;
 					}
 				}
@@ -212,9 +213,21 @@ int main(void)
 
 		}
 
+		// Use dac_lower to figure out with half of the buffer to operate on.
 		uint16_t *dac_ptr = dac_lower ? &dac_buf[0] : &dac_buf[dac_size/2];
 
-		for (int i = 0; i < dac_size/2; i++) dac_ptr[i] = 0;
+		// Synthesize the signal.
+		for (int i = 0; i < dac_size/2; i++) {
+			float acc = 0.0f;
+			for (int j = 0; j < notes_len; j++) {
+				float phase = (float) notes[j].counter / notes[j].period;
+				//acc += (sinf(2.0f*M_PI*phase) + 1.0f)/2.0f;
+				acc += phase;
+				notes[j].counter = (notes[j].counter + 1) % notes[j].period;
+			}
+			acc /= 50.0f;
+			dac_ptr[i] = UINT16_MAX * acc;
+		}
 
 		// Remove expired notes from the array.
 		// It's the ol' swap-and-pop.
