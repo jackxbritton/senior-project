@@ -76,8 +76,7 @@ volatile bool dac_lower = false;
 
 typedef struct {
 	uint8_t number, velocity;
-	float frequency;
-	int counter;
+	int counter, period;
 	int envelope_counter;
 } Note;
 
@@ -185,8 +184,8 @@ int main(void)
 	float volume = 1.0f;
 	float pitch_bend = 1.0f;
 
-	const int attack = 0.0f * fs;
-	const int release = 0.0f * fs;
+	const int attack = 0.1f * fs;
+	const int release = 2.0f * fs;
 
 	/* USER CODE END 2 */
 
@@ -216,7 +215,8 @@ int main(void)
 			// All the events we care about are 3 bytes long.
 			if (midi_len != 3) continue;
 
-			if ((midi_buf[0] >> 4) == 0x09) {
+			uint8_t type = midi_buf[0] >> 4;
+			if (type == 0x09) {
 
 				// Note on event.
 
@@ -242,13 +242,14 @@ int main(void)
 					if (notes_len < NOTES_CAP && number < 128) {
 						notes[notes_len].number = number;
 						notes[notes_len].velocity = velocity;
-						notes[notes_len].frequency = note_frequencies[number];
+						float f = pitch_bend * note_frequencies[number];
+						notes[notes_len].period = roundf(fs / f);
 						notes[notes_len].counter = 0;
 						notes[notes_len].envelope_counter = 0;
 						notes_len++;
 					}
 				}
-			} else if ((midi_buf[0] >> 4) == 0x08) {
+			} else if (type == 0x08) {
 
 				// Note off event.
 
@@ -261,13 +262,17 @@ int main(void)
 					}
 				}
 
-			} else if ((midi_buf[0] >> 4) == 0x0b && midi_buf[1] == 0x07) {
+			} else if (type == 0x0b && midi_buf[1] == 0x07) {
 				// Volume change.
 				volume = log2f(midi_buf[2]) / 7.0f;
-			} else if ((midi_buf[0] >> 4) == 0xe) {
+			} else if (type == 0xe) {
 				// Pitch bending.
 				if (midi_buf[2] < 128) {
 					pitch_bend = pow2[midi_buf[2]];
+					for (int i = 0; i < notes_len; i++) {
+						float f = pitch_bend * note_frequencies[notes[i].number];
+						notes[i].period = roundf(fs / f);
+					}
 				}
 			}
 
@@ -303,16 +308,12 @@ int main(void)
 			float acc = 0.0f;
 			for (int j = 0; j < notes_len; j++) {
 
-				float f = notes[j].frequency * pitch_bend;
-				if (f == 0.0f) continue;
-				int period = roundf(fs / f);
-				if (period == 0) continue;
-				float phase = (float) notes[j].counter / period;
+				if (notes[j].period == 0) continue;
+				float phase = (float) notes[j].counter / notes[j].period;
 
-				acc += envelopes[j][i] * (sine[(int) roundf(phase*SINE_RES)] + 1.0f)/2.0f;
-				//acc += envelopes[j][i] * phase;
-				notes[j].counter = (notes[j].counter + 1) % period;
-				notes[j].envelope_counter++;
+				//acc += envelopes[j][i] * (sine[(int) roundf(phase*SINE_RES)] + 1.0f)/2.0f;
+				acc += envelopes[j][i] * phase;
+				notes[j].counter = (notes[j].counter + 1) % notes[j].period;
 			}
 			acc /= 100.0f;
 			acc *= volume;
