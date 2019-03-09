@@ -37,6 +37,7 @@ BUILD_DIR = build
 # C sources
 C_SOURCES =  \
 Src/main.c \
+Src/biquad.c \
 Src/stm32f7xx_it.c \
 Src/stm32f7xx_hal_msp.c \
 Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_cortex.c \

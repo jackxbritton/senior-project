@@ -46,6 +46,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdbool.h>
+#include "biquad.h"
 
 /* USER CODE END Includes */
 
@@ -151,13 +152,6 @@ int main(void)
 	// UART interrupts.
 	HAL_UART_Receive_IT(&huart5, (uint8_t *) &uart_buf[uart_head], 1);
 
-	// Precomputed sine table.
-#define SINE_RES 4096
-	float sine[SINE_RES];
-	for (int i = 0; i < SINE_RES; i++) {
-		sine[i] = sinf(2.0f*M_PI * (float) i/SINE_RES);
-	}
-
 	// Precomputed table for exponential pitch bending.
 	float pow2[128];
 	for (int i = 0; i < 128; i++) {
@@ -184,8 +178,13 @@ int main(void)
 	float volume = 1.0f;
 	float pitch_bend = 1.0f;
 
-	const int attack = 0.1f * fs;
+	// Constants for a simplified sound envelope.
+	const int attack = 0.4f * fs;
 	const int release = 2.0f * fs;
+
+	// Low pass filter.
+	BiquadFilter low_pass;
+	biquad_filter_low_pass(&low_pass, fs, 1500.0f, 1.0f);
 
 	/* USER CODE END 2 */
 
@@ -307,15 +306,13 @@ int main(void)
 		for (int i = 0; i < dac_size/2; i++) {
 			float acc = 0.0f;
 			for (int j = 0; j < notes_len; j++) {
-
 				if (notes[j].period == 0) continue;
 				float phase = (float) notes[j].counter / notes[j].period;
-
-				//acc += envelopes[j][i] * (sine[(int) roundf(phase*SINE_RES)] + 1.0f)/2.0f;
 				acc += envelopes[j][i] * phase;
 				notes[j].counter = (notes[j].counter + 1) % notes[j].period;
 			}
-			acc /= 100.0f;
+			//acc = biquad_filter_process(&low_pass, acc);
+			acc /= 50.0f;
 			acc *= volume;
 			dac_ptr[i] = UINT16_MAX * acc;
 		}
