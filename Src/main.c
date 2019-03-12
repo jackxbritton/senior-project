@@ -79,6 +79,7 @@ typedef struct {
 	uint8_t number, velocity;
 	int counter, period;
 	int envelope_counter;
+	int lfo_counter;
 } Note;
 
 /* USER CODE END PV */
@@ -185,17 +186,15 @@ int main(void)
 	float volume = 1.0f;
 	float pitch_bend = 1.0f;
 
-	// LFO.
-	float lfo_frequency = 8.0f;
-	float am_amplitude = 0.0f, pm_amplitude = 0.0f;
-
 	// Constants for a simplified sound envelope.
 	const int attack = 0.0f * fs;
-	const int release = 0.3f * fs;
+	const int release = 0.0f * fs;
 
 	// Low pass filter.
 	BiquadFilter low_pass;
 	biquad_filter_low_pass(&low_pass, fs, 2000.0f, 1.0f);
+
+	float pm_amplitude = 0.0f, am_amplitude = 0.0f;
 
 	/* USER CODE END 2 */
 
@@ -256,6 +255,7 @@ int main(void)
 						notes[notes_len].period = roundf(fs / f);
 						notes[notes_len].counter = 0;
 						notes[notes_len].envelope_counter = 0;
+						notes[notes_len].lfo_counter = 0;
 						notes_len++;
 					}
 				}
@@ -288,7 +288,7 @@ int main(void)
 				// Modulation.
 				if (midi_buf[2] < 128) {
 					//am_amplitude = midi_buf[2] / 128.0f;
-					pm_amplitude = midi_buf[2] / 128.0f;
+					pm_amplitude = midi_buf[2] / 128.0f * 8.0f;
 				}
 			}
 
@@ -321,22 +321,21 @@ int main(void)
 		// Synthesize the signal.
 		for (int i = 0; i < dac_size/2; i++) {
 
-			// LFO.
-			int lfo_period = roundf(fs / lfo_frequency);
-			static int lfo_counter = 0;
-			float lfo = sine[(int) ((float) lfo_counter/lfo_period * SINE_RES)];
-			lfo_counter = (lfo_counter + 1) % lfo_period;
-
 			float acc = 0.0f;
 			for (int j = 0; j < notes_len; j++) {
-				if (notes[j].period == 0) continue;
-				float phase = (float) notes[j].counter / notes[j].period;
-				phase += pm_amplitude * lfo * 40.0f;
 
-				//acc += envelopes[j][i] * phase * (1.0f - lfo*am_amplitude);
+				// LFO.
+				float lfo[2];
+				float lfo_phase = (float) notes[j].lfo_counter / notes[j].period;
+				lfo[0] = sine[(int) (lfo_phase * SINE_RES)];
+				lfo[1] = sine[(int) (fmodf(lfo_phase + 0.125f*lfo[0], 1.0f) * SINE_RES)];
+				notes[j].lfo_counter = (notes[j].lfo_counter+1) % notes[j].period;
+
+				float phase = (float) notes[j].counter / notes[j].period;
+				phase += envelopes[j][i] * pm_amplitude * lfo[1];
 
 				phase = fmodf(phase, 1.0f);
-				acc += envelopes[j][i] * (0.5f + 0.5f*sine[(int) (phase*SINE_RES)]) * (1.0f - lfo*am_amplitude);
+				acc += envelopes[j][i] * (0.5f + 0.5f*sine[(int) (phase*SINE_RES)]);
 				//acc += envelopes[j][i] * (phase < 0.5f ? 0.0f : 1.0f);
 				notes[j].counter = (notes[j].counter + 1) % notes[j].period;
 			}
