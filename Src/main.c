@@ -64,7 +64,7 @@ UART_HandleTypeDef huart5;
 /* Private variables ---------------------------------------------------------*/
 
 // uart_buf is the buffer for receiving MIDI data byte-by-byte.
-#define UART_CAP 64
+#define UART_CAP 512
 volatile uint8_t uart_buf[UART_CAP];
 volatile int uart_head, uart_tail;
 
@@ -137,7 +137,7 @@ int main(void)
 	MX_GFXSIMULATOR_Init();
 	/* USER CODE BEGIN 2 */
 
-	const int fs = roundf(108e6 / (htim6.Init.Period + 1));
+	const int fs = roundf(108e6f / 2048);
 
 	// Initialize the DAC DMA buffer.
 	int dac_size = 2048;
@@ -174,17 +174,28 @@ int main(void)
 	Note notes[NOTES_CAP];
 	int notes_len = 0;
 
+#define SINE_RES 1024
+	float sine[SINE_RES];
+	for (int i = 0; i < SINE_RES; i++) sine[i] = 0.5f + 0.5f*sinf(2.0f*M_PI * (float) i/SINE_RES);
+
+	// Envelope buffer.
+	float envelopes[NOTES_CAP][dac_size/2];
+
 	// We also track the volume.
 	float volume = 1.0f;
 	float pitch_bend = 1.0f;
 
+	// LFO.
+	float lfo_frequency = 8.0f;
+	float am_amplitude = 0.0f, pm_amplitude = 0.0f;
+
 	// Constants for a simplified sound envelope.
-	const int attack = 0.4f * fs;
-	const int release = 2.0f * fs;
+	const int attack = 0.0f * fs;
+	const int release = 0.3f * fs;
 
 	// Low pass filter.
 	BiquadFilter low_pass;
-	biquad_filter_low_pass(&low_pass, fs, 1500.0f, 1.0f);
+	biquad_filter_low_pass(&low_pass, fs, 2000.0f, 1.0f);
 
 	/* USER CODE END 2 */
 
@@ -273,6 +284,12 @@ int main(void)
 						notes[i].period = roundf(fs / f);
 					}
 				}
+			} else if (type == 0xb) {
+				// Modulation.
+				if (midi_buf[2] < 128) {
+					//am_amplitude = midi_buf[2] / 128.0f;
+					pm_amplitude = midi_buf[2] / 128.0f;
+				}
 			}
 
 		}
@@ -281,7 +298,6 @@ int main(void)
 		uint16_t *dac_ptr = dac_lower ? &dac_buf[0] : &dac_buf[dac_size/2];
 
 		// Compute envelopes.
-		float envelopes[notes_len][dac_size/2];
 		for (int i = 0; i < notes_len; i++) {
 			if (notes[i].velocity > 0) {
 				int j;
@@ -304,16 +320,28 @@ int main(void)
 
 		// Synthesize the signal.
 		for (int i = 0; i < dac_size/2; i++) {
+
+			// LFO.
+			int lfo_period = roundf(fs / lfo_frequency);
+			static int lfo_counter = 0;
+			float lfo = sine[(int) ((float) lfo_counter/lfo_period * SINE_RES)];
+			lfo_counter = (lfo_counter + 1) % lfo_period;
+
 			float acc = 0.0f;
 			for (int j = 0; j < notes_len; j++) {
 				if (notes[j].period == 0) continue;
 				float phase = (float) notes[j].counter / notes[j].period;
-				acc += envelopes[j][i] * phase;
+				phase += pm_amplitude * lfo * 40.0f;
+
+				//acc += envelopes[j][i] * phase * (1.0f - lfo*am_amplitude);
+
+				phase = fmodf(phase, 1.0f);
+				acc += envelopes[j][i] * (0.5f + 0.5f*sine[(int) (phase*SINE_RES)]) * (1.0f - lfo*am_amplitude);
+				//acc += envelopes[j][i] * (phase < 0.5f ? 0.0f : 1.0f);
 				notes[j].counter = (notes[j].counter + 1) % notes[j].period;
 			}
-			//acc = biquad_filter_process(&low_pass, acc);
-			acc /= 50.0f;
-			acc *= volume;
+			acc = biquad_filter_process(&low_pass, acc);
+			acc *= volume / NOTES_CAP / 10.0f;
 			dac_ptr[i] = UINT16_MAX * acc;
 		}
 
