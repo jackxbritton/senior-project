@@ -185,8 +185,6 @@ int main(void)
 	float volume = 1.0f;
 	float pitch_bend = 1.0f;
 
-	float envelopes[NOTES_CAP][dac_size/2];
-
 	// Constants for a simplified sound envelope.
 	const int attack = 0.005f * fs;
 	const int release = 0.3f * fs;
@@ -301,51 +299,62 @@ int main(void)
 		// Use dac_lower to figure out with half of the buffer to operate on.
 		uint16_t *dac_ptr = dac_lower ? &dac_buf[0] : &dac_buf[dac_size/2];
 
-		// Compute envelopes.
+		// Synthesize the signal.
+		float out[dac_size/2];
+		memset(out, 0, sizeof(out));
+
+		/*
+		// LFO.
+		static int lfo_counter = 0;
+		float lfo_frequency = 4.0f;
+		int lfo_period = roundf(fs / lfo_frequency);
+		float lfo = sine[(int) ((float) lfo_counter / lfo_period * SINE_RES)];
+		lfo_counter = (lfo_counter+1) % lfo_period;
+		*/
+
+		// For each note..
 		for (int i = 0; i < notes_len; i++) {
+
+			if (notes[i].period == 0) continue;
+
+			// Compute the envelope.
+			float envelope[dac_size/2];
 			if (notes[i].velocity > 0) {
 				int j;
 				for (j = 0; j < dac_size/2 && notes[i].envelope_counter < attack; j++, notes[i].envelope_counter++) {
-					envelopes[i][j] = (float) notes[i].envelope_counter / attack;
+					envelope[j] = (float) notes[i].envelope_counter / attack;
 				}
 				for (; j < dac_size/2; j++) {
-					envelopes[i][j] = 1.0f;
+					envelope[j] = 1.0f;
 				}
 			} else {
 				int j;
 				for (j = 0; j < dac_size/2 && notes[i].envelope_counter < release; j++, notes[i].envelope_counter++) {
-					envelopes[i][j] = (float) (release - notes[i].envelope_counter) / release;
+					envelope[j] = (float) (release - notes[i].envelope_counter) / release;
 				}
 				for (; j < dac_size/2; j++) {
-					envelopes[i][j] = 0.0f;
+					envelope[j] = 0.0f;
 				}
 			}
-		}
 
-		// Synthesize the signal.
-		for (int i = 0; i < dac_size/2; i++) {
+			// Synthesize the signal.
+			for (int j = 0; j < dac_size/2; j++) {
 
-			// LFO.
-			static int lfo_counter = 0;
-			float lfo_frequency = 4.0f;
-			int lfo_period = roundf(fs / lfo_frequency);
-			float lfo = sine[(int) ((float) lfo_counter / lfo_period * SINE_RES)];
-			lfo_counter = (lfo_counter+1) % lfo_period;
+				float phase = (float) notes[i].counter / notes[i].period;
+				notes[i].counter = (notes[i].counter + 1) % notes[i].period;
 
-			float acc = 0.0f;
-			for (int j = 0; j < notes_len; j++) {
-				if (notes[j].period == 0) continue;
-
-				float phase = (float) notes[j].counter / notes[j].period;
-				notes[j].counter = (notes[j].counter + 1) % notes[j].period;
-
-				phase += lfo * pm_amplitude;
-				acc += envelopes[j][i] * fmodf(phase, 1.0f) * (1.0f - lfo*am_amplitude);
+				//phase += lfo * pm_amplitude;
+				out[j] += envelope[j] * fmodf(phase, 1.0f);
+				//out[j] += fmodf(phase, 1.0f);
 
 			}
-			acc = biquad_filter_process(&low_pass, acc);
-			acc *= volume / NOTES_CAP / 10.0f;
-			dac_ptr[i] = UINT16_MAX * acc;
+
+		}
+
+		// Copy out into dac_ptr.
+		for (int j = 0; j < dac_size/2; j++) {
+			//dac_ptr[j] = UINT16_MAX * biquad_filter_process(&low_pass, out[j]) * volume / NOTES_CAP / 10.0f;
+			dac_ptr[j] = UINT16_MAX * out[j] * volume / NOTES_CAP / 10.0f;
 		}
 
 		// Remove expired notes.
