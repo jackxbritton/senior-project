@@ -81,6 +81,9 @@ typedef struct {
 	int envelope_counter;
 } Note;
 
+#define SINE_RES 1024
+float sine[SINE_RES];
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -95,9 +98,50 @@ static void MX_GFXSIMULATOR_Init(void);
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
 
+static inline float compute_sample(Note *note, float modulation);
+
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
+
+static inline float compute_sample(Note *note, float modulation) {
+
+	// Sawtooth.
+	float phase = (float) note->counter / note->period;
+	note->counter = (note->counter+1) % note->period;
+	return phase;
+
+	// FM synth.
+	//float phase = (float) note->counter / note->period;
+	//note->counter = (note->counter+1) % note->period;
+	//phase += sine[(int) (phase * SINE_RES)] * modulation;
+	//phase = fmodf(phase + 1.0f, 1.0f);
+	//phase += sine[(int) (phase * SINE_RES)] * modulation;
+	//phase = fmodf(phase + 1.0f, 1.0f);
+	//return 0.5f + 0.5f*sine[(int) (phase * SINE_RES)];
+
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+	// Increment uart_tail and request the next byte.
+	int new_tail = (uart_tail+1) % UART_CAP;
+	if (new_tail != uart_head) {
+		uart_tail = new_tail;
+		HAL_UART_Receive_IT(&huart5, (uint8_t *) &uart_buf[uart_tail], 1);
+	}
+}
+
+void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
+	if (dac_wait == false) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+	dac_lower = true;
+	dac_wait = false;
+}
+
+void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
+	if (dac_wait == false) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+	dac_lower = false;
+	dac_wait = false;
+}
 
 /* USER CODE END 0 */
 
@@ -164,9 +208,7 @@ int main(void)
 		note_frequencies[i] = 55.0f * powf(2.0f, (i - 13)/12.0f);
 	}
 
-	// Precomputed sine.
-#define SINE_RES 1024
-	float sine[SINE_RES];
+	// Precompute the sine wave.
 	for (int i = 0; i < SINE_RES; i++) {
 		sine[i] = sinf(2.0f*M_PI * (float) i/SINE_RES);
 	}
@@ -280,7 +322,7 @@ int main(void)
 				} else if (midi_buf[1] == 0x01) {
 					// Modulation.
 					if (midi_buf[2] < 128) {
-						am_amplitude = midi_buf[2] / 128.0f;
+						pm_amplitude = midi_buf[2] / 128.0f;
 					}
 				}
 			} else if (type == 0xe) {
@@ -303,49 +345,34 @@ int main(void)
 		float out[dac_size/2];
 		memset(out, 0, sizeof(out));
 
-		/*
-		// LFO.
-		static int lfo_counter = 0;
-		float lfo_frequency = 4.0f;
-		int lfo_period = roundf(fs / lfo_frequency);
-		float lfo = sine[(int) ((float) lfo_counter / lfo_period * SINE_RES)];
-		lfo_counter = (lfo_counter+1) % lfo_period;
-		*/
-
 		// For each note..
 		for (int i = 0; i < notes_len; i++) {
 
-			if (notes[i].period == 0) continue;
-
-			// Compute the envelope.
-			float envelope[dac_size/2];
+			// Synthesize the signal.
 			if (notes[i].velocity > 0) {
+
 				int j;
 				for (j = 0; j < dac_size/2 && notes[i].envelope_counter < attack; j++, notes[i].envelope_counter++) {
-					envelope[j] = (float) notes[i].envelope_counter / attack;
+					float envelope = (float) notes[i].envelope_counter / attack;
+					out[j] += envelope * compute_sample(&notes[i], pm_amplitude);
 				}
 				for (; j < dac_size/2; j++) {
-					envelope[j] = 1.0f;
+					out[j] += compute_sample(&notes[i], pm_amplitude);
 				}
+
 			} else {
-				int j;
-				for (j = 0; j < dac_size/2 && notes[i].envelope_counter < release; j++, notes[i].envelope_counter++) {
-					envelope[j] = (float) (release - notes[i].envelope_counter) / release;
+
+				for (int j = 0; j < dac_size/2 && notes[i].envelope_counter < release; j++, notes[i].envelope_counter++) {
+					float envelope = (float) (release - notes[i].envelope_counter) / release;
+					out[j] += envelope * compute_sample(&notes[i], pm_amplitude);
 				}
-				for (; j < dac_size/2; j++) {
-					envelope[j] = 0.0f;
+
+				// If the envelope is finished, remove the note from the array with the ol' swap-and-pop.
+				if (notes[i].envelope_counter == release) {
+					notes[i] = notes[notes_len-1];
+					notes_len--;
+					i--;
 				}
-			}
-
-			// Synthesize the signal.
-			for (int j = 0; j < dac_size/2; j++) {
-
-				float phase = (float) notes[i].counter / notes[i].period;
-				notes[i].counter = (notes[i].counter + 1) % notes[i].period;
-
-				//phase += lfo * pm_amplitude;
-				out[j] += envelope[j] * fmodf(phase, 1.0f);
-				//out[j] += fmodf(phase, 1.0f);
 
 			}
 
@@ -353,18 +380,7 @@ int main(void)
 
 		// Copy out into dac_ptr.
 		for (int j = 0; j < dac_size/2; j++) {
-			//dac_ptr[j] = UINT16_MAX * biquad_filter_process(&low_pass, out[j]) * volume / NOTES_CAP / 10.0f;
-			dac_ptr[j] = UINT16_MAX * out[j] * volume / NOTES_CAP / 10.0f;
-		}
-
-		// Remove expired notes.
-		for (int i = 0; i < notes_len; i++) {
-			if (notes[i].velocity == 0 && notes[i].envelope_counter >= release) {
-				// Remove it from the array with the ol' swap-and-pop.
-				notes[i] = notes[notes_len-1];
-				notes_len--;
-				i--;
-			}
+			dac_ptr[j] = UINT16_MAX * biquad_filter_process(&low_pass, out[j]) * volume / NOTES_CAP / 50.0f;
 		}
 
 		// Heartbeat LED.
@@ -571,27 +587,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-	// Increment uart_tail and request the next byte.
-	int new_tail = (uart_tail+1) % UART_CAP;
-	if (new_tail != uart_head) {
-		uart_tail = new_tail;
-		HAL_UART_Receive_IT(&huart5, (uint8_t *) &uart_buf[uart_tail], 1);
-	}
-}
-
-void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
-	if (dac_wait == false) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
-	dac_lower = true;
-	dac_wait = false;
-}
-
-void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdma) {
-	if (dac_wait == false) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
-	dac_lower = false;
-	dac_wait = false;
-}
 
 /* USER CODE END 4 */
 
