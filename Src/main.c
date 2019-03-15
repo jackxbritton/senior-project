@@ -114,8 +114,8 @@ static inline float compute_sample(Note *note, float modulation) {
 	// FM synth.
 	//float phase = (float) note->counter / note->period;
 	//note->counter = (note->counter+1) % note->period;
-	//phase += sine[(int) (phase * SINE_RES)] * modulation;
-	//phase = fmodf(phase + 1.0f, 1.0f);
+	//phase += phase * modulation;
+	//phase = fmodf(4.77f*phase + 1.0f, 1.0f);
 	//phase += sine[(int) (phase * SINE_RES)] * modulation;
 	//phase = fmodf(phase + 1.0f, 1.0f);
 	//return 0.5f + 0.5f*sine[(int) (phase * SINE_RES)];
@@ -228,8 +228,8 @@ int main(void)
 	float pitch_bend = 1.0f;
 
 	// Constants for a simplified sound envelope.
-	const int attack = 0.005f * fs;
-	const int release = 0.3f * fs;
+	const int attack = 0.001f * fs;
+	const int release = 0.4f * fs;
 
 	// Low pass filter.
 	BiquadFilter low_pass;
@@ -273,6 +273,23 @@ int main(void)
 
 				uint8_t number = midi_buf[1],
 				      velocity = midi_buf[2];
+
+				//HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+				//HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+				//HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
+				//if (velocity & 64) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+				//if (velocity & 128) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+				//if (velocity & 4) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+
+				// MIDI note 10 doesn't read correctly. SO weird.
+				// I hardcoded a fix.
+				static bool toggle = true;
+				if (number == 13 && velocity == 10) {
+					number = 10;
+					if (toggle) velocity = 128;
+					else        velocity = 0;
+					toggle = !toggle;
+				}
 
 				if (velocity == 0) {
 					// Find the note in the array and set the velocity to zero.
@@ -380,11 +397,11 @@ int main(void)
 
 		// Copy out into dac_ptr.
 		for (int j = 0; j < dac_size/2; j++) {
-			dac_ptr[j] = UINT16_MAX * biquad_filter_process(&low_pass, out[j]) * volume / NOTES_CAP / 50.0f;
+			dac_ptr[j] = UINT16_MAX * biquad_filter_process(&low_pass, out[j]) * volume / NOTES_CAP / 10.0f;
 		}
 
 		// Heartbeat LED.
-		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
+		//HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
 
 	}
 	/* USER CODE END 3 */
