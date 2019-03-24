@@ -79,6 +79,7 @@ typedef struct {
 	uint8_t number, velocity;
 	int counter, period;
 	int envelope_counter;
+	int lfo_counter;
 } Note;
 
 #define SINE_RES 1024
@@ -98,18 +99,22 @@ static void MX_GFXSIMULATOR_Init(void);
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
 
-static inline float compute_sample(Note *note, float modulation);
+static inline float compute_sample(int fs, Note *note, float modulation);
 
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
 
-static inline float compute_sample(Note *note, float modulation) {
+static inline float compute_sample(int fs, Note *note, float modulation) {
+
+	int lfo_period = roundf(fs / 8.0f);
+	float lfo = sine[(int) (SINE_RES * (float) note->lfo_counter / lfo_period)];
+	note->lfo_counter = (note->lfo_counter + 1) % lfo_period;
 
 	// Sawtooth.
 	float phase = (float) note->counter / note->period;
 	note->counter = (note->counter+1) % note->period;
-	return phase;
+	return phase * (1.0f - lfo*modulation);
 
 	// FM synth.
 	//float phase = (float) note->counter / note->period;
@@ -228,8 +233,8 @@ int main(void)
 	float pitch_bend = 1.0f;
 
 	// Constants for a simplified sound envelope.
-	const int attack = 0.001f * fs;
-	int release = 0.4f * fs;
+	const int attack = 0.0f * fs;
+	const int release = 0.5f * fs;
 
 	// Low pass filter.
 	BiquadFilter low_pass;
@@ -309,6 +314,7 @@ int main(void)
 						notes[notes_len].period = roundf(fs / f);
 						notes[notes_len].counter = 0;
 						notes[notes_len].envelope_counter = 0;
+						notes[notes_len].lfo_counter = 0;
 						notes_len++;
 					}
 				}
@@ -360,15 +366,14 @@ int main(void)
 		memset(out, 0, sizeof(out));
 
 		// LFO.
-		float lfo[dac_size/2];
-		float lfo_frequency = 8.0f;
-		int lfo_period = roundf(fs / lfo_frequency);
-		static int lfo_counter;
-		for (int i = 0; i < dac_size/2; i++) {
-			lfo[i] = sine[(int) ((float) lfo_counter / lfo_period * SINE_RES)];
-			lfo_counter = (lfo_counter+1) % lfo_period;
-		}
-
+		//float lfo[dac_size/2];
+		//float lfo_frequency = 8.0f;
+		//int lfo_period = roundf(fs / lfo_frequency);
+		//static int lfo_counter;
+		//for (int i = 0; i < dac_size/2; i++) {
+		//	lfo[i] = sine[(int) ((float) lfo_counter / lfo_period * SINE_RES)];
+		//	lfo_counter = (lfo_counter+1) % lfo_period;
+		//}
 
 		// For each note..
 		for (int i = 0; i < notes_len; i++) {
@@ -379,17 +384,17 @@ int main(void)
 				int j;
 				for (j = 0; j < dac_size/2 && notes[i].envelope_counter < attack; j++, notes[i].envelope_counter++) {
 					float envelope = (float) notes[i].envelope_counter / attack;
-					out[j] += envelope * compute_sample(&notes[i], pm_amplitude) * (1.0f - (lfo[j] * am_amplitude));
+					out[j] += envelope * compute_sample(fs, &notes[i], am_amplitude);
 				}
 				for (; j < dac_size/2; j++) {
-					out[j] += compute_sample(&notes[i], pm_amplitude) * (1.0f - (lfo[j] * am_amplitude));
+					out[j] += compute_sample(fs, &notes[i], am_amplitude);
 				}
 
 			} else {
 
 				for (int j = 0; j < dac_size/2 && notes[i].envelope_counter < release; j++, notes[i].envelope_counter++) {
 					float envelope = (float) (release - notes[i].envelope_counter) / release;
-					out[j] += envelope * compute_sample(&notes[i], pm_amplitude) * (1.0f - (lfo[j] * am_amplitude));
+					out[j] += envelope * compute_sample(fs, &notes[i], am_amplitude);
 				}
 
 				// If the envelope is finished, remove the note from the array with the ol' swap-and-pop.
@@ -405,7 +410,7 @@ int main(void)
 
 		// Copy out into dac_ptr.
 		for (int j = 0; j < dac_size/2; j++) {
-			dac_ptr[j] = UINT16_MAX * biquad_filter_process(&low_pass, out[j]) * volume / NOTES_CAP / 10.0f;
+			dac_ptr[j] = UINT16_MAX * biquad_filter_process(&low_pass, out[j]) * volume / NOTES_CAP / 8.0f;
 		}
 
 		// Heartbeat LED.
