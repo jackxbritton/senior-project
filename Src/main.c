@@ -205,7 +205,7 @@ int main(void)
 	// Precomputed note frequencies.
 	float note_frequencies[128];
 	for (int i = 0; i < 128; i++) {
-		note_frequencies[i] = 55.0f * powf(2.0f, (i - 13)/12.0f);
+		note_frequencies[i] = 55.0f * powf(2.0f, (i - 33)/12.0f);
 	}
 
 	// Precompute the sine wave.
@@ -229,7 +229,7 @@ int main(void)
 
 	// Constants for a simplified sound envelope.
 	const int attack = 0.001f * fs;
-	const int release = 0.4f * fs;
+	int release = 0.4f * fs;
 
 	// Low pass filter.
 	BiquadFilter low_pass;
@@ -266,6 +266,8 @@ int main(void)
 			// All the events we care about are 3 bytes long.
 			if (midi_len != 3) continue;
 
+			HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
+
 			uint8_t type = midi_buf[0] >> 4;
 			if (type == 0x09) {
 
@@ -273,13 +275,6 @@ int main(void)
 
 				uint8_t number = midi_buf[1],
 				      velocity = midi_buf[2];
-
-				//HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-				//HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
-				//HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
-				//if (velocity & 64) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-				//if (velocity & 128) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
-				//if (velocity & 4) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
 
 				// MIDI note 10 doesn't read correctly. SO weird.
 				// I hardcoded a fix.
@@ -339,7 +334,9 @@ int main(void)
 				} else if (midi_buf[1] == 0x01) {
 					// Modulation.
 					if (midi_buf[2] < 128) {
-						pm_amplitude = midi_buf[2] / 128.0f;
+						//pm_amplitude = midi_buf[2] / 128.0f;
+						//release = 4.0f * fs * (midi_buf[2] / 128.0f);
+						am_amplitude = midi_buf[2] / 128.0f;
 					}
 				}
 			} else if (type == 0xe) {
@@ -362,6 +359,17 @@ int main(void)
 		float out[dac_size/2];
 		memset(out, 0, sizeof(out));
 
+		// LFO.
+		float lfo[dac_size/2];
+		float lfo_frequency = 8.0f;
+		int lfo_period = roundf(fs / lfo_frequency);
+		static int lfo_counter;
+		for (int i = 0; i < dac_size/2; i++) {
+			lfo[i] = sine[(int) ((float) lfo_counter / lfo_period * SINE_RES)];
+			lfo_counter = (lfo_counter+1) % lfo_period;
+		}
+
+
 		// For each note..
 		for (int i = 0; i < notes_len; i++) {
 
@@ -371,17 +379,17 @@ int main(void)
 				int j;
 				for (j = 0; j < dac_size/2 && notes[i].envelope_counter < attack; j++, notes[i].envelope_counter++) {
 					float envelope = (float) notes[i].envelope_counter / attack;
-					out[j] += envelope * compute_sample(&notes[i], pm_amplitude);
+					out[j] += envelope * compute_sample(&notes[i], pm_amplitude) * (1.0f - (lfo[j] * am_amplitude));
 				}
 				for (; j < dac_size/2; j++) {
-					out[j] += compute_sample(&notes[i], pm_amplitude);
+					out[j] += compute_sample(&notes[i], pm_amplitude) * (1.0f - (lfo[j] * am_amplitude));
 				}
 
 			} else {
 
 				for (int j = 0; j < dac_size/2 && notes[i].envelope_counter < release; j++, notes[i].envelope_counter++) {
 					float envelope = (float) (release - notes[i].envelope_counter) / release;
-					out[j] += envelope * compute_sample(&notes[i], pm_amplitude);
+					out[j] += envelope * compute_sample(&notes[i], pm_amplitude) * (1.0f - (lfo[j] * am_amplitude));
 				}
 
 				// If the envelope is finished, remove the note from the array with the ol' swap-and-pop.
@@ -401,7 +409,7 @@ int main(void)
 		}
 
 		// Heartbeat LED.
-		//HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
+		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
 
 	}
 	/* USER CODE END 3 */
