@@ -107,7 +107,7 @@ static inline float compute_sample(int fs, Note *note, float modulation);
 
 static inline float compute_sample(int fs, Note *note, float modulation) {
 
-	int lfo_period = roundf(fs / 8.0f);
+	int lfo_period = roundf(fs / (1.0f + 9.0f * modulation));
 	float lfo = sine[(int) (SINE_RES * (float) note->lfo_counter / lfo_period)];
 	note->lfo_counter = (note->lfo_counter + 1) % lfo_period;
 
@@ -119,10 +119,10 @@ static inline float compute_sample(int fs, Note *note, float modulation) {
 	// FM synth.
 	//float phase = (float) note->counter / note->period;
 	//note->counter = (note->counter+1) % note->period;
-	//phase += phase * modulation;
-	//phase = fmodf(4.77f*phase + 1.0f, 1.0f);
 	//phase += sine[(int) (phase * SINE_RES)] * modulation;
 	//phase = fmodf(phase + 1.0f, 1.0f);
+	//phase += sine[(int) (phase * SINE_RES)] * modulation;
+	//phase = fmodf(2.0f*phase + 1.0f, 1.0f);
 	//return 0.5f + 0.5f*sine[(int) (phase * SINE_RES)];
 
 }
@@ -241,7 +241,7 @@ int main(void)
 	biquad_filter_low_pass(&low_pass, fs, 1500.0f, 1.0f);
 
 	// Modulation.
-	float pm_amplitude = 0.0f, am_amplitude = 0.0f;
+	float modulation = 0.0f;
 
 	/* USER CODE END 2 */
 
@@ -340,9 +340,8 @@ int main(void)
 				} else if (midi_buf[1] == 0x01) {
 					// Modulation.
 					if (midi_buf[2] < 128) {
-						//pm_amplitude = midi_buf[2] / 128.0f;
+						modulation = midi_buf[2] / 128.0f;
 						//release = 4.0f * fs * (midi_buf[2] / 128.0f);
-						am_amplitude = midi_buf[2] / 128.0f;
 					}
 				}
 			} else if (type == 0xe) {
@@ -384,17 +383,17 @@ int main(void)
 				int j;
 				for (j = 0; j < dac_size/2 && notes[i].envelope_counter < attack; j++, notes[i].envelope_counter++) {
 					float envelope = (float) notes[i].envelope_counter / attack;
-					out[j] += envelope * compute_sample(fs, &notes[i], am_amplitude);
+					out[j] += envelope * compute_sample(fs, &notes[i], modulation);
 				}
 				for (; j < dac_size/2; j++) {
-					out[j] += compute_sample(fs, &notes[i], am_amplitude);
+					out[j] += compute_sample(fs, &notes[i], modulation);
 				}
 
 			} else {
 
 				for (int j = 0; j < dac_size/2 && notes[i].envelope_counter < release; j++, notes[i].envelope_counter++) {
 					float envelope = (float) (release - notes[i].envelope_counter) / release;
-					out[j] += envelope * compute_sample(fs, &notes[i], am_amplitude);
+					out[j] += envelope * compute_sample(fs, &notes[i], modulation);
 				}
 
 				// If the envelope is finished, remove the note from the array with the ol' swap-and-pop.
@@ -410,7 +409,7 @@ int main(void)
 
 		// Copy out into dac_ptr.
 		for (int j = 0; j < dac_size/2; j++) {
-			dac_ptr[j] = UINT16_MAX * biquad_filter_process(&low_pass, out[j]) * volume / NOTES_CAP / 8.0f;
+			dac_ptr[j] = (2 << 12) * biquad_filter_process(&low_pass, out[j]) * volume / NOTES_CAP;
 		}
 
 		// Heartbeat LED.
